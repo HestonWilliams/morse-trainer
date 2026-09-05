@@ -195,13 +195,29 @@ body.playing #replayBtn { color: var(--green); border-color: var(--green); }
 .check { display: flex; gap: 10px; align-items: center; padding: 5px 0; font-size: 15px; cursor: pointer; }
 .check input { width: 20px; height: 20px; margin: 0; accent-color: var(--accent); }
 input[type="range"] { width: 100%; accent-color: var(--accent); }
-.unlocked { font-family: ui-monospace, Menlo, monospace; font-size: 15px; letter-spacing: .2em; word-break: break-all; margin-top: 4px; }
+.label-row { display: flex; align-items: center; gap: 8px; }
+.label-row .h { margin-bottom: 0; }
+.info {
+  width: 20px; height: 20px; border-radius: 50%; padding: 0; line-height: 1;
+  border: 1px solid var(--muted); background: transparent; color: var(--muted);
+  font: italic 700 13px Georgia, serif; margin-bottom: 6px;
+}
+.info:hover, .info[aria-expanded="true"] { color: var(--fg); border-color: var(--fg); }
+.unlocked { font-size: 14px; color: var(--muted); margin-top: 6px; }
+.unlocked span { font-family: ui-monospace, Menlo, monospace; font-size: 15px; color: var(--fg); word-break: break-all; }
 .unlocked b { color: var(--green); }
 textarea {
   width: 100%; min-height: 96px; background: var(--panel-2); color: var(--fg);
   border: 1px solid var(--border); border-radius: 8px; padding: 8px;
   font-family: ui-monospace, Menlo, monospace; font-size: 14px; resize: vertical;
 }
+.meter { position: relative; height: 12px; background: var(--panel-2); border: 1px solid var(--border); border-radius: 6px; overflow: hidden; margin: 10px 0 6px; }
+.meter-fill { height: 100%; width: 0; background: var(--blue); }
+.meter-thr { position: absolute; top: 0; bottom: 0; width: 2px; background: var(--green); display: none; }
+.mic-row { display: flex; align-items: center; gap: 8px; font-size: 14px; color: var(--muted); margin-bottom: 8px; }
+.mic-row span:last-child { margin-left: auto; font-variant-numeric: tabular-nums; }
+.keyled { width: 12px; height: 12px; border-radius: 50%; background: var(--border); flex: none; }
+.keyled.on { background: var(--blue); box-shadow: 0 0 8px var(--blue); }
 .backdrop { display: none; position: fixed; inset: 0; background: rgba(0,0,0,.55); z-index: 10; }
 
 @media (min-width: 801px) {
@@ -277,7 +293,7 @@ textarea {
 
     <div class="keypad" id="keypad">
       <button class="key" id="keyBtn" type="button" aria-label="Straight key">KEY</button>
-      <div class="keyhint">hold <kbd>Space</kbd> on desktop</div>
+      <div class="keyhint" id="keyHint">hold <kbd>Space</kbd> on desktop</div>
     </div>
   </main>
 
@@ -293,6 +309,21 @@ textarea {
         <button type="button" data-mode="char">Character</button>
         <button type="button" data-mode="spell">Spell</button>
         <button type="button" data-mode="transcribe">Transcribe</button>
+      </div>
+    </div>
+
+    <div class="field">
+      <span class="h">Key input</span>
+      <div class="seg" id="inputSeg">
+        <button type="button" data-input="manual">Keyboard / touch</button>
+        <button type="button" data-input="mic">Audio input</button>
+      </div>
+      <p class="desc" id="inputDesc"></p>
+      <div id="micPanel" hidden>
+        <div class="meter"><div class="meter-fill" id="micMeter"></div><div class="meter-thr" id="micThr"></div></div>
+        <div class="mic-row"><span class="keyled" id="micLed"></span><span id="micState">Key up</span><span id="micLevel"></span></div>
+        <button class="btn" id="micCalibrate" type="button">Calibrate</button>
+        <p class="desc" id="micMsg"></p>
       </div>
     </div>
 
@@ -322,9 +353,13 @@ textarea {
     </div>
 
     <div class="field">
-      <label class="h" for="level">Koch level: <b id="levelVal"></b></label>
+      <div class="label-row">
+        <label class="h" for="level"><b id="levelVal"></b></label>
+        <button class="info" id="levelInfoBtn" type="button" aria-label="What is a lesson?" aria-expanded="false" aria-controls="levelInfo">i</button>
+      </div>
       <input type="range" id="level" min="1" max="40" step="1">
-      <div class="unlocked" id="unlockedList"></div>
+      <div class="unlocked">Practicing: <span id="unlockedList"></span></div>
+      <p class="desc" id="levelInfo" hidden>This trainer uses the Koch method: characters are introduced a few at a time, in an order chosen so that similar-sounding characters are kept apart. Move to the next lesson when you feel comfortable with the current set.</p>
     </div>
 
     <div class="field">
@@ -372,6 +407,22 @@ const TIMING = {
   WPM_MIN: 5, WPM_MAX: 30, WPM_DEFAULT: 15,
 };
 const AUDIO_CFG = { FREQ_HZ: 600, VOLUME: 0.35, ENVELOPE_MS: 5 };
+
+// Audio-input keying (a real key feeding a tone into the microphone).
+const MIC = {
+  FFT_SIZE: 1024,          // ~21 ms window at 48 kHz, ~47 Hz per bin
+  POLL_MS: 4,              // how often the analyser is read
+  HOLD_MS: 8,              // level must stay past the threshold this long before a state change
+  HYSTERESIS: 0.6,         // key-up only once the level drops below this fraction of the threshold
+  BAND_BINS: 2,            // RMS is taken over the tone bin +/- this many bins
+  TONE_MIN_HZ: 300, TONE_MAX_HZ: 1200,   // where to look for the tone
+  CAL_PHASE_MS: 2500,      // each calibration phase: settle, then sample
+  CAL_SETTLE_MS: 500,      // ignored at the start of each phase (reaction time)
+  MIN_RATIO: 3,            // key-down level must be at least this many times key-up (~10 dB)
+  MAX_BELOW_DOWN: 0.1,     // threshold is never below this fraction of the key-down level (-20 dB)
+  PLAYBACK_GUARD_MS: 150,  // detection stays off this long after target playback ends
+  METER_MIN_DB: -90, METER_MAX_DB: -10,  // live meter range
+};
 
 function ditMs()     { return TIMING.PARIS_MS / settings.wpm; }
 function charGapMs() { return Math.max(TIMING.GAP_FLOOR_MS, TIMING.CHAR_GAP_UNITS * ditMs()); }
@@ -459,6 +510,9 @@ const DEFAULTS = {
   showLetter: true, showPattern: false, autoplay: true, playOnce: false,  // preset 2, Recall
   customWords: '',
   missScore: {},                      // per-character miss weight, decays on clean hits
+  keyInput: 'manual',                 // 'manual' (keyboard, touch, USB adapter) | 'mic' (audio input)
+  micThreshold: 0,                    // band RMS level between key-up and key-down, from calibration
+  micToneHz: 0,                       // tone frequency found during calibration
 };
 
 let settings = loadSettings();
@@ -471,6 +525,7 @@ function loadSettings() {
   s.level = clamp(+s.level || 1, 1, KOCH_ORDER.length);
   s.autoAdvanceMs = clamp(+s.autoAdvanceMs || TIMING.autoAdvanceMs, TIMING.AUTO_ADVANCE_MIN, TIMING.AUTO_ADVANCE_MAX);
   if (!['char', 'spell', 'transcribe'].includes(s.mode)) s.mode = 'char';
+  if (!['manual', 'mic'].includes(s.keyInput)) s.keyInput = 'manual';
   return s;
 }
 function saveSettings() {
@@ -556,7 +611,7 @@ function pickWord() {
 function updateWordNote() {
   const el = $('wordNote');
   el.hidden = settings.mode === 'char' || !usingRandomGroups;
-  el.textContent = `No list words fit level ${settings.level} yet, so random groups are used. Raise the level for real words.`;
+  el.textContent = `No list words fit lesson ${settings.level} yet, so random groups are used. Move up a lesson for real words.`;
 }
 
 /* ==================================================================
@@ -569,6 +624,7 @@ function updateWordNote() {
  * ================================================================== */
 const Audio = {
   ctx: null, keyGain: null, playGain: null,
+  muted: false,       // sidetone off while audio input is active (it would feed back into the mic)
   playbackUntil: 0,   // ctx time at which the scheduled playback ends
   uiTimer: 0,         // only toggles the "playing" class, never sequences audio
 
@@ -608,6 +664,7 @@ const Audio = {
   keyDown() {
     if (!this.ensure()) return;
     this.stopPlayback();
+    if (this.muted) return;
     const t = this.ctx.currentTime;
     this.anchor(this.keyGain.gain, t);
     this.keyGain.gain.linearRampToValueAtTime(AUDIO_CFG.VOLUME, t + this.env());
@@ -679,6 +736,167 @@ const Audio = {
     this.playbackUntil = 0;
   },
 };
+
+/* ==================================================================
+ * 6b. AUDIO INPUT: a real key heard through the microphone
+ *     mic -> AnalyserNode; the RMS of the bins around the tone drives a
+ *     hysteresis detector that calls Keyer.keyDown()/keyUp(), so every
+ *     element and gap goes through the same path as the spacebar.
+ * ================================================================== */
+const MicInput = {
+  stream: null, source: null, analyser: null, bins: null, binHz: 0,
+  timer: 0, tick: 0, active: false,
+  level: 0, peakHz: 0,                  // latest band RMS (linear) and strongest bin in range
+  keyDown: false, candidate: null, candidateSince: 0,
+  cal: null,                            // calibration state while a calibration runs
+  message: '',
+
+  async start() {
+    if (this.active) return true;
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      this.setMessage('This browser cannot capture audio. The keyboard and on-screen key still work.');
+      return false;
+    }
+    this.setMessage('Requesting microphone…');
+    let stream;
+    try {
+      // The defaults would treat a steady tone as noise or echo and suppress it.
+      stream = await navigator.mediaDevices.getUserMedia({
+        audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false },
+      });
+    } catch (e) {
+      const denied = e && (e.name === 'NotAllowedError' || e.name === 'SecurityError');
+      this.setMessage(denied
+        ? 'Microphone access was denied. Allow it in the browser\'s site settings and try again. The keyboard and on-screen key still work.'
+        : 'Could not open the microphone (' + (e && e.name || e) + '). The keyboard and on-screen key still work.');
+      return false;
+    }
+    const ctx = Audio.ensure();
+    if (!ctx) { stream.getTracks().forEach(t => t.stop()); this.setMessage('Web Audio is unavailable in this browser.'); return false; }
+    this.stream = stream;
+    this.source = ctx.createMediaStreamSource(stream);
+    this.analyser = ctx.createAnalyser();
+    this.analyser.fftSize = MIC.FFT_SIZE;
+    this.analyser.smoothingTimeConstant = 0;
+    this.source.connect(this.analyser);
+    this.bins = new Float32Array(this.analyser.frequencyBinCount);
+    this.binHz = ctx.sampleRate / MIC.FFT_SIZE;
+    this.active = true;
+    Audio.muted = true;
+    this.timer = setInterval(() => this.poll(), MIC.POLL_MS);
+    this.setMessage(settings.micThreshold
+      ? `Listening. Calibrated for a ${Math.round(settings.micToneHz)} Hz tone.`
+      : 'Listening. Calibrate once before your first lesson.');
+    updateInputUI();
+    return true;
+  },
+
+  stop() {
+    if (!this.active) return;
+    clearInterval(this.timer);
+    this.timer = 0;
+    this.cal = null;
+    if (this.keyDown) { this.keyDown = false; Keyer.keyUp(); }
+    this.candidate = null;
+    this.source.disconnect();
+    this.stream.getTracks().forEach(t => t.stop());
+    this.stream = this.source = this.analyser = null;
+    this.active = false;
+    Audio.muted = false;
+    this.setMessage('');
+    updateInputUI();
+  },
+
+  // Band RMS around the tone: the calibrated tone once known, otherwise the
+  // strongest bin in range. Room noise at other frequencies stays outside the band.
+  measure() {
+    this.analyser.getFloatFrequencyData(this.bins);
+    const lo = Math.max(1, Math.floor(MIC.TONE_MIN_HZ / this.binHz));
+    const hi = Math.min(this.bins.length - 1, Math.ceil(MIC.TONE_MAX_HZ / this.binHz));
+    let peak = lo;
+    for (let i = lo; i <= hi; i++) if (this.bins[i] > this.bins[peak]) peak = i;
+    this.peakHz = peak * this.binHz;
+    const toneHz = this.cal ? this.cal.toneHz : settings.micToneHz;
+    const center = toneHz ? Math.round(toneHz / this.binHz) : peak;
+    let sum = 0, n = 0;
+    for (let i = center - MIC.BAND_BINS; i <= center + MIC.BAND_BINS; i++) {
+      if (i < 0 || i >= this.bins.length) continue;
+      const mag = Math.pow(10, this.bins[i] / 20);
+      sum += mag * mag; n++;
+    }
+    this.level = Math.sqrt(sum / n);
+  },
+
+  poll() {
+    if (!this.active) return;
+    this.measure();
+    if (this.cal) this.calibrateStep(); else this.detect();
+    if ((this.tick++ & 3) === 0) renderMicMeter();
+  },
+
+  // Hysteresis + hold: down above the threshold, up below HYSTERESIS x threshold,
+  // and either only after the level has held there for HOLD_MS.
+  detect() {
+    const thr = settings.micThreshold;
+    if (!thr) return;
+    const guard = Audio.ctx.currentTime < Audio.playbackUntil + MIC.PLAYBACK_GUARD_MS / 1000;
+    const want = guard ? false : (this.keyDown ? this.level >= thr * MIC.HYSTERESIS : this.level > thr);
+    if (want === this.keyDown) { this.candidate = null; return; }
+    const now = performance.now();
+    if (this.candidate !== want) { this.candidate = want; this.candidateSince = now; return; }
+    if (now - this.candidateSince < MIC.HOLD_MS) return;
+    this.keyDown = want;
+    this.candidate = null;
+    if (want) Keyer.keyDown(); else Keyer.keyUp();
+  },
+
+  // One-time calibration: sample with the key held, then with it released,
+  // and put the threshold between the two levels.
+  calibrate() {
+    if (!this.active || this.cal) return;
+    if (this.keyDown) { this.keyDown = false; Keyer.keyUp(); }
+    this.cal = { phase: 'down', start: performance.now(), levels: [], peaks: {}, toneHz: 0, downLevel: 0 };
+    this.setMessage('Press and hold your key for two seconds…');
+  },
+  calibrateStep() {
+    const c = this.cal, elapsed = performance.now() - c.start;
+    if (elapsed > MIC.CAL_SETTLE_MS) {
+      c.levels.push(this.level);
+      if (c.phase === 'down') { const k = Math.round(this.peakHz); c.peaks[k] = (c.peaks[k] || 0) + 1; }
+    }
+    if (elapsed < MIC.CAL_PHASE_MS) return;
+    if (c.phase === 'down') {
+      c.downLevel = median(c.levels);
+      c.toneHz = +Object.keys(c.peaks).reduce((a, b) => c.peaks[a] >= c.peaks[b] ? a : b);
+      c.phase = 'up'; c.start = performance.now(); c.levels = [];
+      this.setMessage('Now release the key and keep quiet for two seconds…');
+      return;
+    }
+    const upLevel = percentile(c.levels, 0.95);
+    this.cal = null;
+    if (!(c.downLevel > upLevel * MIC.MIN_RATIO)) {
+      this.setMessage(`Could not tell key-down (${toDb(c.downLevel)} dB) from key-up (${toDb(upLevel)} dB). Check that the tone reaches the mic, then calibrate again.`);
+      return;
+    }
+    settings.micToneHz = c.toneHz;
+    // Midpoint on a dB scale, but never more than 20 dB below key-down: a very
+    // quiet room would otherwise put the threshold so low that the tone trips it
+    // at the very edges of the analyser window and every element reads long.
+    settings.micThreshold = Math.max(Math.sqrt(c.downLevel * upLevel), c.downLevel * MIC.MAX_BELOW_DOWN);
+    saveSettings();
+    this.setMessage(`Calibrated: ${Math.round(c.toneHz)} Hz tone, key-down ${toDb(c.downLevel)} dB, key-up ${toDb(upLevel)} dB, threshold ${toDb(settings.micThreshold)} dB.`);
+  },
+
+  setMessage(text) { this.message = text; const el = document.getElementById('micMsg'); if (el) el.textContent = text; },
+};
+
+function toDb(v) { return Math.round(20 * Math.log10(Math.max(v, 1e-9))); }
+function median(a) { return percentile(a, 0.5); }
+function percentile(a, p) {
+  if (!a.length) return 0;
+  const s = a.slice().sort((x, y) => x - y);
+  return s[Math.min(s.length - 1, Math.floor(p * s.length))];
+}
 
 /* ==================================================================
  * 7. KEY INPUT: spacebar + on-screen key -> timed elements
@@ -1171,16 +1389,63 @@ function syncSettingsUI() {
   $('autoAdvance').value = settings.autoAdvanceMs;
   $('autoAdvanceVal').textContent = settings.autoAdvanceMs;
   $('level').value = settings.level;
-  $('levelVal').textContent = `${settings.level} of ${KOCH_ORDER.length}`;
+  $('levelVal').textContent = `Lesson ${settings.level} of ${KOCH_ORDER.length}`;
   const u = unlockedChars();
-  $('unlockedList').innerHTML = u.map((c, i) => i === u.length - 1 ? `<b>${escapeHtml(c)}</b>` : escapeHtml(c)).join('');
+  $('unlockedList').innerHTML = u.map((c, i) => i === u.length - 1 ? `<b>${escapeHtml(c)}</b>` : escapeHtml(c)).join(' ');
   $('customWords').value = settings.customWords;
   const custom = customWordList();
   const fit = availableWords().length;
   $('wordListNote').textContent = custom.length
-    ? `Custom list: ${custom.length} words, ${fit} fit level ${settings.level}.`
-    : `Built-in list: ${BUILTIN_WORDS.length} words, ${fit} fit level ${settings.level}.`;
+    ? `Custom list: ${custom.length} words, ${fit} fit lesson ${settings.level}.`
+    : `Built-in list: ${BUILTIN_WORDS.length} words, ${fit} fit lesson ${settings.level}.`;
   Stats.render();
+}
+
+const INPUT_DESC = {
+  manual: 'Spacebar, the on-screen key, or a real key on a USB adapter that sends Space (see the README).',
+  mic: 'Key a practice oscillator or your rig\'s sidetone into the microphone. The app\'s own sidetone is off in this mode, and detection pauses while the target plays.',
+};
+
+function updateInputUI() {
+  const mic = settings.keyInput === 'mic';
+  $('inputSeg').querySelectorAll('button').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.input === settings.keyInput)));
+  $('inputDesc').textContent = INPUT_DESC[settings.keyInput];
+  $('micPanel').hidden = !mic;
+  $('micCalibrate').disabled = !MicInput.active || !!MicInput.cal;
+  $('micMsg').textContent = MicInput.message;
+  $('keyHint').innerHTML = MicInput.active
+    ? 'audio input active &middot; sidetone off'
+    : 'hold <kbd>Space</kbd> on desktop';
+  renderMicMeter();
+}
+
+function renderMicMeter() {
+  if ($('micPanel').hidden) return;
+  const span = MIC.METER_MAX_DB - MIC.METER_MIN_DB;
+  const pct = v => clamp((toDb(v) - MIC.METER_MIN_DB) / span, 0, 1) * 100;
+  $('micMeter').style.width = MicInput.active ? pct(MicInput.level) + '%' : '0%';
+  const thr = $('micThr');
+  thr.style.display = settings.micThreshold ? 'block' : 'none';
+  if (settings.micThreshold) thr.style.left = pct(settings.micThreshold) + '%';
+  $('micLed').classList.toggle('on', MicInput.keyDown);
+  $('micState').textContent = MicInput.active ? (MicInput.keyDown ? 'Key down' : 'Key up') : 'Microphone off';
+  $('micLevel').textContent = MicInput.active ? toDb(MicInput.level) + ' dB' : '';
+  $('micCalibrate').disabled = !MicInput.active || !!MicInput.cal;
+}
+
+// Switch key input source. The mic starts only once the app has started
+// (first gesture); if it cannot start, fall back to manual input.
+async function setKeyInput(name) {
+  settings.keyInput = name;
+  saveSettings();
+  if (name !== 'mic') { MicInput.stop(); updateInputUI(); return; }
+  updateInputUI();
+  if (!started) { MicInput.setMessage('The microphone opens after you tap to start.'); return; }
+  const ok = await MicInput.start();
+  if (!ok) { settings.keyInput = 'manual'; saveSettings(); }
+  const msg = MicInput.message;
+  updateInputUI();
+  if (!ok) { $('inputDesc').textContent = msg; }   // keep the failure reason visible after falling back
 }
 
 function openSettings(open) {
@@ -1193,6 +1458,10 @@ function bindSettings() {
   $('closeSettings').addEventListener('click', () => openSettings(false));
   $('backdrop').addEventListener('click', () => openSettings(false));
 
+  $('inputSeg').addEventListener('click', e => {
+    const b = e.target.closest('button'); if (b) setKeyInput(b.dataset.input);
+  });
+  $('micCalibrate').addEventListener('click', () => { MicInput.calibrate(); updateInputUI(); });
   $('modeSeg').addEventListener('click', e => {
     const b = e.target.closest('button'); if (b) setMode(b.dataset.mode);
   });
@@ -1224,6 +1493,11 @@ function bindSettings() {
     syncSettingsUI();
   });
   $('level').addEventListener('change', () => { if (started) current.start(); });
+  $('levelInfoBtn').addEventListener('click', () => {
+    const open = $('levelInfo').hidden;
+    $('levelInfo').hidden = !open;
+    $('levelInfoBtn').setAttribute('aria-expanded', String(open));
+  });
   let wordsTimer = 0;
   $('customWords').addEventListener('input', e => {
     settings.customWords = e.target.value;
@@ -1233,8 +1507,8 @@ function bindSettings() {
       const fit = availableWords().length;
       const custom = customWordList();
       $('wordListNote').textContent = custom.length
-        ? `Custom list: ${custom.length} words, ${fit} fit level ${settings.level}.`
-        : `Built-in list: ${BUILTIN_WORDS.length} words, ${fit} fit level ${settings.level}.`;
+        ? `Custom list: ${custom.length} words, ${fit} fit lesson ${settings.level}.`
+        : `Built-in list: ${BUILTIN_WORDS.length} words, ${fit} fit lesson ${settings.level}.`;
       if (started && settings.mode !== 'char') current.start();
     }, 400);
   });
@@ -1303,6 +1577,7 @@ function startApp() {
   Audio.ensure();
   $('startOverlay').hidden = true;
   current.start();
+  if (settings.keyInput === 'mic') setKeyInput('mic');
 }
 
 /* ==================================================================
@@ -1314,6 +1589,7 @@ updateUnit();
 if (window.ResizeObserver) new ResizeObserver(updateUnit).observe($('practice'));
 else window.addEventListener('resize', updateUnit);
 setMode(settings.mode);
+updateInputUI();
 </script>
 </body>
 </html>

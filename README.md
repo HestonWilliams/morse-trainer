@@ -39,6 +39,26 @@ Whenever the green pattern is hidden, the retry ladder applies:
 
 If the pattern is already visible (level 1), a miss just clears the row and you try again with the pattern still up.
 
+## Using a real key
+
+Choose the input source under **Key input** in settings. The spacebar and on-screen key always keep working, whatever you pick.
+
+### USB adapter (no setup in the app)
+
+Any straight key wired to a USB HID adapter that sends a spacebar keypress works with the trainer's existing keyboard handler. Off-the-shelf "Morse key to USB" adapters do this, and so does the do-it-yourself route: take a sacrificial USB keyboard, find the two contacts of its space switch, and wire the key across them. Leave the input set to **Keyboard / touch**.
+
+### Audio input
+
+Key a practice oscillator, or your rig's sidetone, into the computer's microphone and the trainer detects the tone as key-down and key-up.
+
+1. Set **Key input** to **Audio input** and allow microphone access when the browser asks. The mic is opened with echo cancellation, noise suppression and automatic gain control turned off, because those would treat a steady tone as something to remove.
+2. Press **Calibrate**. Hold your key for two seconds when asked, then release it and stay quiet for two seconds. The trainer finds your tone's frequency, measures the level with the key down and up, and stores a threshold between them.
+3. Watch the meter and the key-down light in the panel to confirm detection before starting a lesson.
+
+While audio input is active the app's own sidetone is muted, since the speakers would otherwise feed back into the mic and be detected as keying. Target playback still sounds, and detection pauses while it plays. Detection uses the level of the frequency bins around your tone, so room noise at other frequencies does not trigger it. It has hysteresis, key-up only below 60 percent of the threshold, and a short hold time, so the decay of an element does not chatter. The detector calls the same keyer as the spacebar, so all timing and gap rules are unchanged.
+
+If microphone access is denied, the trainer says so, keeps the keyboard and on-screen key available, and switches the input back to keyboard.
+
 ## Timing
 
 All timing constants are in the `TIMING` object at the top of the script in `index.html`.
@@ -57,7 +77,7 @@ Characters unlock in Koch order:
 K M R S U A P T L O W I . N J E F 0 Y V , G 5 / Q 9 Z H 3 8 B ? 4 2 7 C 1 D 6 X
 ```
 
-Level N unlocks the first N characters. Characters are drawn at random from the unlocked set, weighted toward recent misses. Word modes only use words made entirely of unlocked characters. If no word fits, the trainer serves random groups until you raise the level.
+The **Lesson** slider in settings controls how many are in play: lesson N unlocks the first N characters, and the characters currently being practiced are always listed under the slider. Characters are drawn at random from that set, weighted toward recent misses. Move up a lesson when you feel comfortable with the current set. Word modes only use words made entirely of unlocked characters. If no word fits, the trainer serves random groups until you move up a lesson.
 
 The stat line tracks attempts, accuracy, and streak for the session. Expand the per-character table to see accuracy for each unlocked character.
 
@@ -65,11 +85,11 @@ The stat line tracks attempts, accuracy, and streak for the session. Expand the 
 
 Everything lives in `index.html`. The script is divided into numbered, commented sections.
 
-**Characters.** Add the character and its pattern to the `MORSE` table in section 2, then insert it where you want it in the `KOCH_ORDER` string in the same section. The level slider reads its maximum from the length of that list, so nothing else needs to change. Prosigns can be added the same way using a single-character key.
+**Characters.** Add the character and its pattern to the `MORSE` table in section 2, then insert it where you want it in the `KOCH_ORDER` string in the same section. The Lesson slider reads its maximum from the length of that list, so nothing else needs to change. Prosigns can be added the same way using a single-character key.
 
 **Word lists.** The built-in lists are `COMMON_WORDS` and `HAM_WORDS` in section 3. Both are plain whitespace-separated strings, so add words anywhere in them. Words must use only characters present in `MORSE`.
 
-**Your own words without editing code.** Paste a list into the custom word list box in settings, one word per line. It overrides the built-in list, is filtered to the unlocked characters, and persists in `localStorage`. Clear the box to go back to the built-in list.
+**Your own words without editing code.** Paste a list into the custom word list box in settings, one word per line. It overrides the built-in list, is filtered to the characters in the current lesson, and persists in `localStorage`. Clear the box to go back to the built-in list.
 
 ## License
 
