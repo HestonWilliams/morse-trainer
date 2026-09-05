@@ -1,0 +1,1319 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<meta name="color-scheme" content="dark">
+<title>Morse Trainer</title>
+<style>
+/* ------------------------------------------------------------------
+   Theme + layout
+   ------------------------------------------------------------------ */
+:root {
+  --bg: #0b0e14;
+  --panel: #131824;
+  --panel-2: #0f1420;
+  --border: #273044;
+  --fg: #eef1f7;
+  --muted: #8b93a7;
+  --green: #3ddc84;
+  --blue: #4da3ff;
+  --red: #ff4d5e;
+  --accent: #4da3ff;
+  --unit: 12px;        /* width of one dit, set by JS from the viewport */
+  --bar-h: 20px;       /* height of a bar row; never changes at runtime */
+  --stage-units: 28;   /* stage width in dits (longest pattern is 19) */
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body {
+  background: var(--bg);
+  color: var(--fg);
+  font: 16px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  height: 100dvh;
+  overflow: hidden;
+  touch-action: manipulation;
+}
+button { font: inherit; cursor: pointer; }
+kbd { font-family: ui-monospace, Menlo, monospace; border: 1px solid var(--border); border-radius: 4px; padding: 0 5px; font-size: .9em; }
+.btn {
+  background: var(--panel); color: var(--fg); border: 1px solid var(--border);
+  border-radius: 10px; padding: 8px 14px; font-size: 15px; white-space: nowrap;
+}
+.btn:hover { border-color: var(--muted); }
+.btn:disabled { opacity: .4; cursor: not-allowed; }
+.btn.primary { background: var(--accent); color: #001; border-color: var(--accent); font-weight: 700; }
+.btn.icon { padding: 8px 12px; font-size: 18px; line-height: 1; }
+body.playing #replayBtn { color: var(--green); border-color: var(--green); }
+
+/* Header */
+.top {
+  flex: none; display: flex; align-items: center; gap: 8px;
+  padding: 8px 12px; border-bottom: 1px solid var(--border);
+  padding-top: max(8px, env(safe-area-inset-top));
+}
+.brand { font-weight: 700; flex: 1; letter-spacing: .02em; }
+
+/* Two-column app on desktop; settings column appears when open */
+.app { flex: 1; min-height: 0; display: grid; grid-template-columns: 1fr; }
+.practice {
+  min-height: 0; overflow: auto; display: flex; flex-direction: column;
+  align-items: center; gap: 10px; padding: 10px 12px;
+}
+.stats { font-size: 14px; color: var(--muted); text-align: center; }
+.stats b { color: var(--fg); font-variant-numeric: tabular-nums; }
+.charstats { width: min(100%, 520px); font-size: 13px; color: var(--muted); }
+.charstats summary { cursor: pointer; text-align: center; }
+.charstats-grid {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(64px, 1fr));
+  gap: 4px; margin-top: 8px; font-family: ui-monospace, Menlo, monospace;
+}
+.charstats-grid div { background: var(--panel); border-radius: 6px; padding: 4px 6px; text-align: center; }
+.charstats-grid .good { color: var(--green); }
+.charstats-grid .bad { color: var(--red); }
+.note { font-size: 13px; color: var(--muted); text-align: center; margin: 0; }
+
+/* ------------------------------------------------------------------
+   Practice stage (Character mode). Fixed-height grid rows so nothing
+   moves when bars appear or the green row is revealed.
+   ------------------------------------------------------------------ */
+.mode { width: 100%; flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 0; }
+.mode[hidden] { display: none; }
+.stage {
+  width: min(100%, calc(var(--unit) * var(--stage-units)));
+  display: grid;
+  grid-template-rows: var(--bar-h) auto var(--bar-h);
+  gap: 16px;
+  justify-items: start;
+}
+.row { height: var(--bar-h); width: 100%; display: flex; align-items: center; overflow: hidden; }
+.row.target.hidden { visibility: hidden; }
+.bar { height: 100%; border-radius: 4px; flex: none; min-width: 3px; }
+.bar.target { background: var(--green); }
+.bar.keyed { background: var(--blue); }
+.bar.keyed.live { opacity: .75; }
+.bar.wrong { background: var(--red); }
+.bigchar {
+  justify-self: center;
+  font-size: clamp(96px, 26vmin, 180px);
+  font-weight: 700; line-height: 1; height: 1em;
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+}
+.bigchar.hiddenLetter { color: var(--muted); opacity: .45; }
+.stage.success .bigchar { color: var(--green); }
+
+/* ------------------------------------------------------------------
+   Spell mode: word on top, one green/blue row pair per character
+   ------------------------------------------------------------------ */
+.word {
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: clamp(36px, 9vmin, 64px); font-weight: 700; letter-spacing: .15em;
+  line-height: 1.2; height: 1.2em; white-space: nowrap;
+}
+.word .locked { color: var(--green); }
+.word .cur { text-decoration: underline; text-underline-offset: .12em; }
+.word .hid { color: var(--muted); opacity: .45; }
+.word.success span { color: var(--green); }
+.spell-rows {
+  width: min(100%, calc(var(--unit) * var(--stage-units) + 56px));
+  display: flex; flex-direction: column; gap: 10px; margin-top: 14px;
+}
+.spell-row { display: grid; grid-template-columns: 44px 1fr; gap: 12px; align-items: center; opacity: .4; }
+.spell-row.active { opacity: 1; }
+.spell-row.locked { opacity: .75; }
+.spell-letter {
+  font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 30px; font-weight: 700;
+  text-align: center; line-height: 1;
+}
+.spell-row.locked .spell-letter { color: var(--green); }
+.spell-letter.hiddenLetter { color: var(--muted); opacity: .45; }
+.spell-row .rows { display: grid; grid-template-rows: var(--bar-h) var(--bar-h); gap: 6px; }
+
+/* ------------------------------------------------------------------
+   Transcribe mode
+   ------------------------------------------------------------------ */
+.tr-form { display: flex; gap: 8px; width: min(100%, 480px); }
+.tr-form input {
+  flex: 1; min-width: 0; font-size: 26px; letter-spacing: .15em; text-transform: uppercase;
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  background: var(--panel-2); color: var(--fg); border: 1px solid var(--border); border-radius: 10px; padding: 8px 12px;
+}
+.tr-result {
+  font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 28px; letter-spacing: .2em;
+  text-align: center; margin-top: 16px; min-height: 96px;
+}
+.tr-result .lbl { display: block; font: 13px system-ui, sans-serif; letter-spacing: 0; color: var(--muted); margin-top: 8px; }
+.tr-result .ok { color: var(--green); }
+.tr-result .bad { color: var(--red); }
+.tr-result .miss { color: var(--red); text-decoration: underline; }
+.tr-result .extra { color: var(--red); opacity: .6; }
+.tr-keys { display: grid; grid-template-columns: repeat(8, 1fr); gap: 6px; width: min(100%, 480px); margin-top: 16px; }
+.tr-keys button { height: 44px; font-size: 18px; font-family: ui-monospace, Menlo, monospace; padding: 0; border-radius: 8px; }
+.tr-keys button.wide { grid-column: span 2; }
+.hint { color: var(--muted); font-size: 14px; margin: 0 0 12px; }
+
+/* ------------------------------------------------------------------
+   On-screen straight key
+   ------------------------------------------------------------------ */
+.keypad {
+  flex: none; width: 100%; display: flex; flex-direction: column; align-items: center; gap: 6px;
+  padding-bottom: env(safe-area-inset-bottom);
+}
+.keypad[hidden] { display: none; }
+.key {
+  width: min(100%, 440px); height: 128px; border-radius: 20px;
+  border: 2px solid var(--border); background: #1a2130; color: var(--fg);
+  font-size: 28px; font-weight: 700; letter-spacing: .25em;
+  touch-action: none; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none;
+}
+.key.down { background: var(--blue); color: #001; border-color: var(--blue); }
+.keyhint { font-size: 12px; color: var(--muted); }
+@media (pointer: fine) { .key { height: 72px; } }
+
+/* ------------------------------------------------------------------
+   Settings panel: side column on desktop, slide-up sheet on mobile
+   ------------------------------------------------------------------ */
+.settings {
+  background: var(--panel); overflow: auto; padding: 16px; display: none;
+  border-left: 1px solid var(--border);
+}
+.settings-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+.field { margin-bottom: 18px; }
+.h { display: block; font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .08em; margin-bottom: 6px; }
+.h b { color: var(--fg); text-transform: none; letter-spacing: 0; font-size: 14px; }
+.desc { font-size: 13px; color: var(--muted); margin: 6px 0 8px; }
+.seg { display: flex; border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
+.seg button {
+  flex: 1; padding: 10px 4px; background: transparent; color: var(--fg); border: 0;
+  border-right: 1px solid var(--border); font-size: 14px;
+}
+.seg button:last-child { border-right: 0; }
+.seg button[aria-pressed="true"] { background: var(--accent); color: #001; font-weight: 700; }
+.check { display: flex; gap: 10px; align-items: center; padding: 5px 0; font-size: 15px; cursor: pointer; }
+.check input { width: 20px; height: 20px; margin: 0; accent-color: var(--accent); }
+input[type="range"] { width: 100%; accent-color: var(--accent); }
+.unlocked { font-family: ui-monospace, Menlo, monospace; font-size: 15px; letter-spacing: .2em; word-break: break-all; margin-top: 4px; }
+.unlocked b { color: var(--green); }
+textarea {
+  width: 100%; min-height: 96px; background: var(--panel-2); color: var(--fg);
+  border: 1px solid var(--border); border-radius: 8px; padding: 8px;
+  font-family: ui-monospace, Menlo, monospace; font-size: 14px; resize: vertical;
+}
+.backdrop { display: none; position: fixed; inset: 0; background: rgba(0,0,0,.55); z-index: 10; }
+
+@media (min-width: 801px) {
+  body.settings-open .app { grid-template-columns: 1fr 340px; }
+  body.settings-open .settings { display: block; }
+}
+@media (max-width: 800px) {
+  :root { --bar-h: 16px; }
+  .settings {
+    display: block; position: fixed; left: 0; right: 0; bottom: 0; z-index: 20;
+    max-height: 85vh; max-height: 85dvh; border-left: 0; border-top: 1px solid var(--border);
+    border-radius: 16px 16px 0 0; transform: translateY(100%); transition: transform .25s ease;
+    padding-bottom: max(16px, env(safe-area-inset-bottom));
+  }
+  body.settings-open .settings { transform: none; }
+  body.settings-open .backdrop { display: block; }
+  .top .btn { padding: 8px 10px; font-size: 14px; }
+}
+
+/* Start overlay: the first tap unlocks audio */
+.overlay {
+  position: fixed; inset: 0; z-index: 50; background: rgba(11,14,20,.94);
+  display: flex; align-items: center; justify-content: center; text-align: center; padding: 24px; cursor: pointer;
+}
+.overlay[hidden] { display: none; }
+.overlay h1 { font-size: 28px; margin: 0 0 8px; }
+.overlay p { color: var(--muted); margin: 4px 0; }
+</style>
+</head>
+<body>
+
+<header class="top">
+  <div class="brand">Morse Trainer</div>
+  <button id="replayBtn" class="btn" type="button" title="Play the target (R)">&#9654; Play target</button>
+  <button id="settingsBtn" class="btn icon" type="button" aria-label="Settings" aria-controls="settings" aria-expanded="false">&#9881;</button>
+</header>
+
+<div class="app" id="app">
+  <main class="practice" id="practice">
+    <div class="stats" id="statLine"></div>
+    <details class="charstats" id="charStats">
+      <summary>Per-character accuracy</summary>
+      <div class="charstats-grid" id="charStatsGrid"></div>
+    </details>
+
+    <!-- Character mode -->
+    <section class="mode" id="mode-char">
+      <div class="stage" id="charStage">
+        <div class="row target" id="charTarget"></div>
+        <div class="bigchar" id="bigChar">&nbsp;</div>
+        <div class="row keyed" id="charKeyed"></div>
+      </div>
+    </section>
+
+    <!-- Spell mode -->
+    <section class="mode" id="mode-spell" hidden>
+      <div class="word" id="spellWord"></div>
+      <div class="spell-rows" id="spellRows"></div>
+    </section>
+
+    <!-- Transcribe mode -->
+    <section class="mode" id="mode-transcribe" hidden>
+      <p class="hint">Listen, then type what you heard.</p>
+      <form class="tr-form" id="trForm" autocomplete="off">
+        <input id="trInput" type="text" autocapitalize="characters" autocorrect="off" spellcheck="false" placeholder="type here" aria-label="Your transcription">
+        <button class="btn primary" id="trSubmit" type="submit">Check</button>
+      </form>
+      <div class="tr-result" id="trResult"></div>
+      <div class="tr-keys" id="trKeys" hidden></div>
+    </section>
+
+    <p class="note" id="wordNote" hidden></p>
+
+    <div class="keypad" id="keypad">
+      <button class="key" id="keyBtn" type="button" aria-label="Straight key">KEY</button>
+      <div class="keyhint">hold <kbd>Space</kbd> on desktop</div>
+    </div>
+  </main>
+
+  <aside class="settings" id="settings">
+    <div class="settings-head">
+      <strong>Settings</strong>
+      <button class="btn icon" id="closeSettings" type="button" aria-label="Close settings">&#10005;</button>
+    </div>
+
+    <div class="field">
+      <span class="h">Practice mode</span>
+      <div class="seg" id="modeSeg">
+        <button type="button" data-mode="char">Character</button>
+        <button type="button" data-mode="spell">Spell</button>
+        <button type="button" data-mode="transcribe">Transcribe</button>
+      </div>
+    </div>
+
+    <div class="field">
+      <span class="h">Assist level: <b id="assistName"></b></span>
+      <div class="seg" id="assistSeg">
+        <button type="button" data-assist="1">1 Guided</button>
+        <button type="button" data-assist="2">2 Recall</button>
+        <button type="button" data-assist="3">3 Ear</button>
+        <button type="button" data-assist="4">4 Blind</button>
+      </div>
+      <p class="desc" id="assistDesc"></p>
+      <label class="check"><input type="checkbox" data-key="showLetter"> Show the letter</label>
+      <label class="check"><input type="checkbox" data-key="showPattern"> Show the target pattern</label>
+      <label class="check"><input type="checkbox" data-key="autoplay"> Auto-play the target</label>
+      <label class="check"><input type="checkbox" data-key="playOnce"> Play once, no replay until the attempt ends</label>
+    </div>
+
+    <div class="field">
+      <label class="h" for="wpm">Speed: <b><span id="wpmVal"></span> wpm</b></label>
+      <input type="range" id="wpm" min="5" max="30" step="1">
+    </div>
+
+    <div class="field">
+      <label class="h" for="autoAdvance">Pause between characters: <b><span id="autoAdvanceVal"></span> ms</b></label>
+      <input type="range" id="autoAdvance" min="200" max="1500" step="50">
+    </div>
+
+    <div class="field">
+      <label class="h" for="level">Koch level: <b id="levelVal"></b></label>
+      <input type="range" id="level" min="1" max="40" step="1">
+      <div class="unlocked" id="unlockedList"></div>
+    </div>
+
+    <div class="field">
+      <label class="h" for="customWords">Custom word list, one per line</label>
+      <textarea id="customWords" placeholder="Leave empty to use the built-in list"></textarea>
+      <p class="desc" id="wordListNote"></p>
+    </div>
+
+    <div class="field">
+      <button class="btn" id="resetStats" type="button">Reset session stats</button>
+      <button class="btn" id="resetMisses" type="button">Reset miss weighting</button>
+    </div>
+  </aside>
+</div>
+<div class="backdrop" id="backdrop"></div>
+
+<div class="overlay" id="startOverlay">
+  <div>
+    <h1>Morse Trainer</h1>
+    <p>Tap or press any key to start.</p>
+    <p>Hold <kbd>Space</kbd> or the on-screen key to send.</p>
+  </div>
+</div>
+
+<script>
+'use strict';
+
+/* ==================================================================
+ * 1. TIMING CONSTANTS  (everything time-related lives here)
+ * ================================================================== */
+const TIMING = {
+  PARIS_MS: 1200,          // ditMs = PARIS_MS / wpm  (the PARIS standard)
+  DAH_THRESHOLD: 2,        // a press held >= this many dits is a dah
+  CHAR_GAP_UNITS: 2,       // word modes: silence > this many dits ends the character
+  WORD_GAP_UNITS: 5,       // word modes: silence > this many dits ends the word
+  GAP_FLOOR_MS: 400,       // gaps are never shorter than this, so slow beginners aren't cut off
+  PLAY_CHAR_GAP_UNITS: 3,  // playback: gap between characters
+  PLAY_WORD_GAP_UNITS: 7,  // playback: gap between words
+  PLAY_LEAD_MS: 50,        // playback: lead-in silence before the first element
+  autoAdvanceMs: 600,      // pause after a correct character before the next one loads (default; settings slider overrides)
+  AUTO_ADVANCE_MIN: 200, AUTO_ADVANCE_MAX: 1500,
+  wordAdvanceMs: 800,      // pause after the last character of a word before the next word loads
+  FLASH_MS: 400,           // how long a wrong bar stays red
+  MAX_GAP_UNITS: 7,        // cap on the drawn gap before a keyed bar
+  WPM_MIN: 5, WPM_MAX: 30, WPM_DEFAULT: 15,
+};
+const AUDIO_CFG = { FREQ_HZ: 600, VOLUME: 0.35, ENVELOPE_MS: 5 };
+
+function ditMs()     { return TIMING.PARIS_MS / settings.wpm; }
+function charGapMs() { return Math.max(TIMING.GAP_FLOOR_MS, TIMING.CHAR_GAP_UNITS * ditMs()); }
+function wordGapMs() { return Math.max(TIMING.GAP_FLOOR_MS, TIMING.WORD_GAP_UNITS * ditMs()); }
+function autoAdvanceMs() { return settings.autoAdvanceMs; }
+
+/* ==================================================================
+ * 2. CURRICULUM: Koch order and the Morse table
+ *    To add a character: add it to MORSE and append it to KOCH_ORDER.
+ * ================================================================== */
+const KOCH_ORDER = [...'KMRSUAPTLOWI.NJEF0YV,G5/Q9ZH38B?427C1D6X'];
+
+const MORSE = {
+  A: '.-',    B: '-...',  C: '-.-.',  D: '-..',   E: '.',     F: '..-.',
+  G: '--.',   H: '....',  I: '..',    J: '.---',  K: '-.-',   L: '.-..',
+  M: '--',    N: '-.',    O: '---',   P: '.--.',  Q: '--.-',  R: '.-.',
+  S: '...',   T: '-',     U: '..-',   V: '...-',  W: '.--',   X: '-..-',
+  Y: '-.--',  Z: '--..',
+  0: '-----', 1: '.----', 2: '..---', 3: '...--', 4: '....-',
+  5: '.....', 6: '-....', 7: '--...', 8: '---..', 9: '----.',
+  '.': '.-.-.-', ',': '--..--', '?': '..--..', '/': '-..-.',
+};
+
+/* ==================================================================
+ * 3. WORD LISTS  (built-in; a custom list in settings overrides these)
+ * ================================================================== */
+const COMMON_WORDS = `
+THE AND FOR ARE BUT NOT YOU ALL ANY CAN HAD HER WAS ONE OUR OUT DAY GET HAS HIM
+HIS HOW MAN NEW NOW OLD SEE TWO WAY WHO BOY DID ITS LET PUT SAY SHE TOO USE DAD
+MOM CAT DOG SUN RUN FUN BIG RED HOT ICE SKY SEA AIR EAT ATE BED BOX BUS CAR CUP
+CUT EGG END EYE FAR FEW FLY FOG GAS GOT HAT HIT JOB KEY KID LAW LEG LOT LOW MAP
+MAY MIX NET OIL OWN PAN PAY PEN PIE PIG POT RAT ROW SAD SAT SET SIT SIX TEN TOP
+TOY TRY VAN WET WIN YES YET ZOO
+ABLE ALSO AREA AWAY BABY BACK BALL BANK BASE BEAR BEST BIRD BLUE BOAT BODY BOOK
+BORN BOTH CALL CAME CARD CARE CASE CITY CLUB COLD COME COOL COST DARK DATA DEAL
+DEEP DOOR DOWN DRAW DROP EACH EASY EVEN EVER FACE FACT FALL FARM FAST FEEL FILL
+FIND FINE FIRE FISH FIVE FLAT FOOD FOOT FORM FOUR FREE FROM FULL GAME GAVE GIRL
+GIVE GOLD GONE GOOD GRAY GREW GROW HALF HAND HARD HAVE HEAD HEAR HEAT HELD HELP
+HERE HIGH HILL HOLD HOME HOPE HOUR HUGE IDEA INTO IRON JUMP JUST KEEP KEPT KIND
+KING KNEW KNOW LAKE LAND LAST LATE LEAD LEFT LESS LIFE LIKE LINE LIST LIVE LONG
+LOOK LOST LOVE MADE MAIL MAIN MAKE MANY MARK MEAN MEET MILE MIND MISS MOON MORE
+MOST MOVE MUCH MUST NAME NEAR NEED NEXT NICE NOTE ONCE ONLY OPEN OVER PAGE PAID
+PARK PART PASS PAST PATH PLAN PLAY POOL POOR PULL PUSH RAIN READ REAL REST RICH
+RIDE RING RISE ROAD ROCK ROOM RULE SAFE SAID SAIL SALT SAME SAND SAVE SEAT SEND
+SHIP SHOP SHOW SIDE SIGN SNOW SOFT SOME SONG SOON SORT STAR STAY STEP STOP SUCH
+SURE TAKE TALK TALL TEAM TELL TEST THAN THAT THEM THEN THEY THIS TIME TOLD TOOK
+TOWN TREE TRIP TRUE TURN VERY WAIT WALK WALL WANT WARM WASH WAVE WEAR WEEK WELL
+WENT WERE WEST WHAT WHEN WIDE WILD WIND WISH WITH WOOD WORD WORK YEAR YOUR ZERO
+`.trim().split(/\s+/);
+
+// Standard ham exchange vocabulary, Q-signals and prosign-ish shorthand.
+const HAM_WORDS = `
+CQ DE QTH QSL RST 73 88 TU NAME UR ANT RIG PWR WX ES HR HW CPY AGN TNX TKS FB
+GM GA GE GN OM YL XYL PSE SRI QRM QRN QRS QRZ QSB QSO QSY QRL QRP QRT QRV QRQ
+BK KN AR SK OP DX CW HI RPT DIPOLE VERT YAGI KW WATT WATTS SOLID COPY CALL SIGS
+RCVD SUNNY CLOUDY WINDY 599 5NN 559 579 589 CUL CUAGN VY NR OK R RR AS BTU
+`.trim().split(/\s+/);
+
+const BUILTIN_WORDS = [...new Set([...COMMON_WORDS, ...HAM_WORDS])];
+
+/* ==================================================================
+ * 4. SETTINGS + PERSISTENCE
+ * ================================================================== */
+const STORAGE_KEY = 'morse-trainer.v1';
+
+// Assist presets. Index 0 is unused so the numbers match the UI labels.
+const PRESETS = [
+  null,
+  { name: 'Guided', desc: 'Letter and pattern shown. Target audio auto-plays.',
+    showLetter: true,  showPattern: true,  autoplay: true, playOnce: false },
+  { name: 'Recall', desc: 'Letter shown. Pattern hidden until you miss twice.',
+    showLetter: true,  showPattern: false, autoplay: true, playOnce: false },
+  { name: 'Ear',    desc: 'Audio only. Replay as often as you like.',
+    showLetter: false, showPattern: false, autoplay: true, playOnce: false },
+  { name: 'Blind',  desc: 'Audio plays once. No replay until the attempt ends.',
+    showLetter: false, showPattern: false, autoplay: true, playOnce: true  },
+];
+const ASSIST_KEYS = ['showLetter', 'showPattern', 'autoplay', 'playOnce'];
+
+const DEFAULTS = {
+  wpm: TIMING.WPM_DEFAULT,
+  level: 1,
+  autoAdvanceMs: TIMING.autoAdvanceMs,
+  mode: 'char',                       // 'char' | 'spell' | 'transcribe'
+  showLetter: true, showPattern: false, autoplay: true, playOnce: false,  // preset 2, Recall
+  customWords: '',
+  missScore: {},                      // per-character miss weight, decays on clean hits
+};
+
+let settings = loadSettings();
+
+function loadSettings() {
+  let saved = {};
+  try { saved = JSON.parse(localStorage.getItem(STORAGE_KEY)) || {}; } catch (e) { /* ignore */ }
+  const s = { ...DEFAULTS, ...saved, missScore: { ...(saved.missScore || {}) } };
+  s.wpm = clamp(+s.wpm || TIMING.WPM_DEFAULT, TIMING.WPM_MIN, TIMING.WPM_MAX);
+  s.level = clamp(+s.level || 1, 1, KOCH_ORDER.length);
+  s.autoAdvanceMs = clamp(+s.autoAdvanceMs || TIMING.autoAdvanceMs, TIMING.AUTO_ADVANCE_MIN, TIMING.AUTO_ADVANCE_MAX);
+  if (!['char', 'spell', 'transcribe'].includes(s.mode)) s.mode = 'char';
+  return s;
+}
+function saveSettings() {
+  try { localStorage.setItem(STORAGE_KEY, JSON.stringify(settings)); } catch (e) { /* private mode etc. */ }
+}
+function clamp(v, lo, hi) { return Math.min(hi, Math.max(lo, v)); }
+
+// Which preset matches the current toggles? 0 = Custom.
+function currentPreset() {
+  for (let i = 1; i < PRESETS.length; i++) {
+    if (ASSIST_KEYS.every(k => PRESETS[i][k] === settings[k])) return i;
+  }
+  return 0;
+}
+function applyPreset(n) {
+  ASSIST_KEYS.forEach(k => { settings[k] = PRESETS[n][k]; });
+  saveSettings();
+}
+
+/* ==================================================================
+ * 5. CURRICULUM HELPERS: unlocked set, weighted picking, word lists
+ * ================================================================== */
+function unlockedChars() { return KOCH_ORDER.slice(0, settings.level); }
+
+function weightedPick(items, weights) {
+  let total = weights.reduce((a, b) => a + b, 0);
+  let r = Math.random() * total;
+  for (let i = 0; i < items.length; i++) {
+    r -= weights[i];
+    if (r < 0) return items[i];
+  }
+  return items[items.length - 1];
+}
+
+let lastChar = null;
+function charWeight(c) { return 1 + 2 * (settings.missScore[c] || 0); }
+
+// Random unlocked character, weighted toward recent misses, never the same twice in a row.
+function pickChar() {
+  let pool = unlockedChars();
+  if (pool.length > 1) pool = pool.filter(c => c !== lastChar);
+  lastChar = weightedPick(pool, pool.map(charWeight));
+  return lastChar;
+}
+function noteMiss(c) { settings.missScore[c] = Math.min(6, (settings.missScore[c] || 0) + 2); saveSettings(); }
+function noteHit(c) {
+  if (!settings.missScore[c]) return;
+  settings.missScore[c] = Math.max(0, settings.missScore[c] - 1);
+  saveSettings();
+}
+
+function customWordList() {
+  return settings.customWords.toUpperCase().split(/\r?\n/)
+    .map(w => w.trim()).filter(w => w && [...w].every(ch => MORSE[ch]));
+}
+function activeWordList() {
+  const custom = customWordList();
+  return custom.length ? custom : BUILTIN_WORDS;
+}
+function availableWords() {
+  const set = new Set(unlockedChars());
+  return activeWordList().filter(w => [...w].every(ch => set.has(ch)));
+}
+
+let lastWord = null;
+let usingRandomGroups = false;
+// A word made only of unlocked characters, weighted toward words containing
+// missed characters. Falls back to random groups when no list word fits.
+function pickWord() {
+  let words = availableWords();
+  usingRandomGroups = words.length === 0;
+  if (usingRandomGroups) {
+    const len = 3 + Math.floor(Math.random() * 3);
+    const pool = unlockedChars();
+    lastWord = Array.from({ length: len }, () => weightedPick(pool, pool.map(charWeight))).join('');
+  } else {
+    if (words.length > 1) words = words.filter(w => w !== lastWord);
+    lastWord = weightedPick(words, words.map(w => 1 + [...w].reduce((a, c) => a + (settings.missScore[c] || 0), 0)));
+  }
+  updateWordNote();
+  return lastWord;
+}
+function updateWordNote() {
+  const el = $('wordNote');
+  el.hidden = settings.mode === 'char' || !usingRandomGroups;
+  el.textContent = `No list words fit level ${settings.level} yet, so random groups are used. Raise the level for real words.`;
+}
+
+/* ==================================================================
+ * 6. AUDIO: one oscillator feeding two gain gates
+ *    osc -> keyGain  -> destination   (manual sidetone, straight key)
+ *    osc -> playGain -> destination   (target playback)
+ *    Keying and playback never share automation on one AudioParam.
+ *    Playback is scheduled entirely up front against ctx.currentTime;
+ *    no setTimeout/setInterval sequences elements.
+ * ================================================================== */
+const Audio = {
+  ctx: null, keyGain: null, playGain: null,
+  playbackUntil: 0,   // ctx time at which the scheduled playback ends
+  uiTimer: 0,         // only toggles the "playing" class, never sequences audio
+
+  // Create lazily on a user gesture; resume if the browser suspended it.
+  ensure() {
+    if (!this.ctx) {
+      const AC = window.AudioContext || window.webkitAudioContext;
+      if (!AC) return null;
+      this.ctx = new AC();
+      this.keyGain = this.ctx.createGain();
+      this.playGain = this.ctx.createGain();
+      this.keyGain.gain.value = 0;
+      this.playGain.gain.value = 0;
+      this.keyGain.connect(this.ctx.destination);
+      this.playGain.connect(this.ctx.destination);
+      const osc = this.ctx.createOscillator();
+      osc.type = 'sine';
+      osc.frequency.value = AUDIO_CFG.FREQ_HZ;
+      osc.connect(this.keyGain);
+      osc.connect(this.playGain);
+      osc.start();
+    }
+    if (this.ctx.state === 'suspended') this.ctx.resume();
+    return this.ctx;
+  },
+  env() { return AUDIO_CFG.ENVELOPE_MS / 1000; },
+
+  // Drop every pending automation event on `param` and anchor it at its
+  // current value at time `now`, so a new curve starts from a known point
+  // instead of fighting the old one.
+  anchor(param, now) {
+    const v = param.value;
+    param.cancelScheduledValues(now);
+    param.setValueAtTime(v, now);
+  },
+
+  keyDown() {
+    if (!this.ensure()) return;
+    this.stopPlayback();
+    const t = this.ctx.currentTime;
+    this.anchor(this.keyGain.gain, t);
+    this.keyGain.gain.linearRampToValueAtTime(AUDIO_CFG.VOLUME, t + this.env());
+  },
+  keyUp() {
+    if (!this.ctx) return;
+    const t = this.ctx.currentTime;
+    this.anchor(this.keyGain.gain, t);
+    this.keyGain.gain.linearRampToValueAtTime(0, t + this.env());
+  },
+
+  // Turn text into playback elements [{ms, gapMs}] with standard spacing:
+  // 1 dit between elements, 3 between characters, 7 between words.
+  textToElements(text) {
+    const u = ditMs(), elems = [];
+    let wordGap = false;
+    for (const ch of text.toUpperCase()) {
+      if (ch === ' ') { wordGap = true; continue; }
+      const pattern = MORSE[ch];
+      if (!pattern) continue;
+      if (elems.length) elems[elems.length - 1].gapMs = (wordGap ? TIMING.PLAY_WORD_GAP_UNITS : TIMING.PLAY_CHAR_GAP_UNITS) * u;
+      wordGap = false;
+      for (const sym of pattern) elems.push({ ms: sym === '.' ? u : 3 * u, gapMs: u });
+    }
+    if (elems.length) elems[elems.length - 1].gapMs = 0;
+    return elems;
+  },
+
+  // Write the whole pattern onto `param` as absolute-time automation.
+  // Anchors at `now`, fades to silence, then runs a cursor from
+  // now + PLAY_LEAD_MS: gain on at cursor, off at cursor + duration,
+  // cursor += duration + gap. Every edge is a 5 ms linear ramp.
+  // Pure with respect to the page, so it can be rendered offline in tests.
+  schedulePlayback(param, now, elems) {
+    const env = this.env(), vol = AUDIO_CFG.VOLUME;
+    this.anchor(param, now);
+    param.linearRampToValueAtTime(0, now + env);
+    let cursor = now + TIMING.PLAY_LEAD_MS / 1000;
+    for (const e of elems) {
+      const d = e.ms / 1000;
+      param.setValueAtTime(0, cursor);
+      param.linearRampToValueAtTime(vol, cursor + env);
+      param.setValueAtTime(vol, cursor + d - env);
+      param.linearRampToValueAtTime(0, cursor + d);
+      cursor += d + e.gapMs / 1000;
+    }
+    return cursor;
+  },
+
+  // Play text now. Any in-flight playback is cancelled first, never layered.
+  playText(text) {
+    if (!this.ensure()) return 0;
+    this.stopPlayback();
+    const now = this.ctx.currentTime;
+    this.playbackUntil = this.schedulePlayback(this.playGain.gain, now, this.textToElements(text));
+    const totalMs = (this.playbackUntil - now) * 1000;
+    document.body.classList.add('playing');
+    this.uiTimer = setTimeout(() => { this.uiTimer = 0; document.body.classList.remove('playing'); }, totalMs);
+    return totalMs;
+  },
+
+  stopPlayback() {
+    if (this.uiTimer) { clearTimeout(this.uiTimer); this.uiTimer = 0; }
+    document.body.classList.remove('playing');
+    if (!this.ctx || this.ctx.currentTime >= this.playbackUntil) return;   // nothing in flight
+    const t = this.ctx.currentTime;
+    this.anchor(this.playGain.gain, t);
+    this.playGain.gain.linearRampToValueAtTime(0, t + this.env());
+    this.playbackUntil = 0;
+  },
+};
+
+/* ==================================================================
+ * 7. KEY INPUT: spacebar + on-screen key -> timed elements
+ *    The active mode is Keyer.listener and receives:
+ *      onKeyDown(gapMs)   key pressed; gapMs = silence since the last key-up
+ *      onHold(ms)         every animation frame while held
+ *      onElement({sym, durMs})  key released; sym is '.' or '-'
+ *      onCharGap()        silence exceeded charGapMs (word modes only)
+ *      onWordGap()        silence exceeded wordGapMs (word modes only)
+ *      accepting()        false while a target is loading; a press that starts
+ *                         then still sounds but is swallowed end to end
+ * ================================================================== */
+const Keyer = {
+  down: false, downAt: 0, upAt: 0, raf: 0, gapTimer: 0, listener: null,
+  swallowed: false,   // current press started while the mode was not accepting input
+
+  keyDown() {
+    if (this.down) return;
+    this.down = true;
+    this.downAt = performance.now();
+    clearTimeout(this.gapTimer);
+    cancelAnimationFrame(this.raf);
+    Audio.keyDown();
+    $('keyBtn').classList.add('down');
+    const L = this.listener;
+    if (!L || !L.onElement) return;           // mode does not take keyed input
+    this.swallowed = !!(L.accepting && !L.accepting());
+    if (this.swallowed) return;               // eager press during the auto-advance pause
+    L.onKeyDown && L.onKeyDown(this.upAt ? this.downAt - this.upAt : 0);
+    const tick = () => {
+      if (!this.down) return;
+      L.onHold && L.onHold(performance.now() - this.downAt);
+      this.raf = requestAnimationFrame(tick);
+    };
+    this.raf = requestAnimationFrame(tick);
+  },
+
+  keyUp() {
+    if (!this.down) return;
+    this.down = false;
+    this.upAt = performance.now();
+    cancelAnimationFrame(this.raf);
+    Audio.keyUp();
+    $('keyBtn').classList.remove('down');
+    const L = this.listener;
+    if (!L || !L.onElement) return;
+    if (this.swallowed) { this.swallowed = false; return; }   // never key into a stale target
+    const durMs = this.upAt - this.downAt;
+    const sym = durMs < TIMING.DAH_THRESHOLD * ditMs() ? '.' : '-';
+    L.onElement({ sym, durMs });
+    this.armGapTimers();
+  },
+
+  // Gap detection for word modes. Only armed if the listener wants it.
+  armGapTimers() {
+    const L = this.listener;
+    if (!L || !L.onCharGap) return;
+    const upAt = this.upAt;
+    const stillSilent = () => !this.down && this.upAt === upAt;
+    this.gapTimer = setTimeout(() => {
+      if (!stillSilent()) return;
+      L.onCharGap();
+      this.gapTimer = setTimeout(() => {
+        if (stillSilent() && L.onWordGap) L.onWordGap();
+      }, wordGapMs() - charGapMs());
+    }, charGapMs());
+  },
+
+  // Forget pending gaps when a mode moves to a new target.
+  reset() { clearTimeout(this.gapTimer); this.upAt = 0; },
+};
+
+/* ==================================================================
+ * 8. BAR RENDERING
+ *    Widths are in dit units via the --unit CSS variable, so bars
+ *    rescale on resize without re-rendering.
+ * ================================================================== */
+function unitsCss(units) { return `calc(var(--unit) * ${units.toFixed(3)})`; }
+
+function makeBar(units, gapUnits, cls) {
+  const b = document.createElement('div');
+  b.className = 'bar ' + cls;
+  b.style.width = unitsCss(units);
+  b.style.marginLeft = unitsCss(gapUnits);
+  return b;
+}
+
+// Green row: ideal proportions, dit = 1, dah = 3, gap = 1.
+function renderTarget(rowEl, pattern) {
+  rowEl.innerHTML = '';
+  [...pattern].forEach((sym, i) => rowEl.appendChild(makeBar(sym === '.' ? 1 : 3, i ? 1 : 0, 'target')));
+}
+
+// Blue row: what the user actually keyed, proportional to real time.
+class KeyedRow {
+  constructor(el) { this.el = el; this.elems = []; this.liveBar = null; }
+  clear() { this.elems = []; this.liveBar = null; this.el.innerHTML = ''; }
+  begin(gapMs) {
+    const e = { sym: null, durMs: 0, gapMs: this.elems.length ? gapMs : 0 };
+    this.elems.push(e);
+    this.liveBar = makeBar(0, Math.min(TIMING.MAX_GAP_UNITS, e.gapMs / ditMs()), 'keyed live');
+    this.el.appendChild(this.liveBar);
+  }
+  hold(ms) { if (this.liveBar) this.liveBar.style.width = unitsCss(ms / ditMs()); }
+  end(sym, durMs) {
+    const e = this.elems[this.elems.length - 1];
+    if (!e || !this.liveBar) return;
+    e.sym = sym; e.durMs = durMs;
+    this.liveBar.style.width = unitsCss(durMs / ditMs());
+    this.liveBar.classList.remove('live');
+    this.liveBar = null;
+  }
+  seq() { return this.elems.filter(e => e.sym).map(e => e.sym).join(''); }
+  flashWrong(indices) {
+    indices.forEach(i => { const b = this.el.children[i]; if (b) b.classList.add('wrong'); });
+  }
+}
+
+// Which bars to paint red: the first mismatch, the last bar if the
+// attempt was short, or every extra bar if it was long.
+function wrongIndices(keyed, pattern) {
+  for (let i = 0; i < Math.min(keyed.length, pattern.length); i++) {
+    if (keyed[i] !== pattern[i]) return [i];
+  }
+  if (keyed.length < pattern.length) return [keyed.length - 1];
+  return Array.from({ length: keyed.length - pattern.length }, (_, i) => pattern.length + i);
+}
+
+/* ==================================================================
+ * 9. CHARACTER MODE
+ *    Evaluate as soon as the keyed sequence is as long as the target.
+ *    After a correct attempt the next character loads automatically
+ *    once autoAdvanceMs has elapsed; key input is ignored until then.
+ * ================================================================== */
+const CharMode = {
+  name: 'char',
+  row: null, target: null, wrongCount: 0, revealed: false, busy: false,
+  elementOpen: false, attemptEnded: false, playCount: 0, timer: 0,
+
+  start() {
+    this.row = this.row || new KeyedRow($('charKeyed'));
+    this.stop();
+    this.next();
+  },
+  stop() { clearTimeout(this.timer); this.busy = false; this.elementOpen = false; },
+
+  next() {
+    this.busy = true;                       // no key input until the target is fully loaded
+    this.target = pickChar();
+    this.wrongCount = 0; this.revealed = false; this.attemptEnded = false;
+    this.playCount = 0; this.elementOpen = false;
+    Keyer.reset();
+    this.row.clear();
+    renderTarget($('charTarget'), MORSE[this.target]);
+    $('charStage').classList.remove('success');
+    this.refresh();
+    if (settings.autoplay) this.playTarget();
+    this.busy = false;
+  },
+
+  accepting() { return !this.busy; },
+
+  // Re-apply assist settings to the display without changing the target.
+  refresh() {
+    const big = $('bigChar');
+    big.textContent = settings.showLetter ? this.target : '•';
+    big.classList.toggle('hiddenLetter', !settings.showLetter);
+    $('charTarget').classList.toggle('hidden', !(settings.showPattern || this.revealed));
+    updateReplayButton();
+  },
+
+  canReplay() { return !settings.playOnce || this.attemptEnded || this.playCount === 0; },
+  playTarget() {
+    if (!this.canReplay()) return;
+    this.playCount++;
+    Audio.playText(this.target);
+    updateReplayButton();
+  },
+
+  onKeyDown(gapMs) { if (this.busy) return; this.elementOpen = true; this.row.begin(gapMs); },
+  onHold(ms) { if (this.elementOpen) this.row.hold(ms); },
+  onElement(e) {
+    if (!this.elementOpen) return;
+    this.elementOpen = false;
+    this.row.end(e.sym, e.durMs);
+    if (this.row.seq().length >= MORSE[this.target].length) this.evaluate();
+  },
+
+  evaluate() {
+    const keyed = this.row.seq(), pattern = MORSE[this.target];
+    this.attemptEnded = true;
+    this.busy = true;
+    if (keyed === pattern) {
+      Stats.record(this.target, true);
+      if (this.wrongCount === 0) noteHit(this.target);
+      $('charStage').classList.add('success');
+      const big = $('bigChar');
+      big.textContent = this.target;                 // the attempt is over, show it
+      big.classList.remove('hiddenLetter');
+      updateReplayButton();
+      this.timer = setTimeout(() => this.next(), autoAdvanceMs());   // auto-advance
+      return;
+    }
+    // Retry ladder: 1st miss = try again, 2nd miss = reveal pattern, then keep it up.
+    Stats.record(this.target, false);
+    noteMiss(this.target);
+    this.wrongCount++;
+    this.row.flashWrong(wrongIndices(keyed, pattern));
+    updateReplayButton();
+    this.timer = setTimeout(() => {
+      this.row.clear();
+      if (this.wrongCount >= 2) this.revealed = true;
+      this.refresh();
+      this.busy = false;
+    }, TIMING.FLASH_MS);
+  },
+};
+
+/* ==================================================================
+ * 10. SPELL MODE
+ *     Whole word shown, keyed one character at a time. A character
+ *     ends when the key has been silent for charGapMs.
+ * ================================================================== */
+const SpellMode = {
+  name: 'spell',
+  word: '', idx: 0, rows: [], wrongCount: 0, revealed: false, busy: false,
+  elementOpen: false, attemptEnded: false, playCount: 0, timer: 0,
+
+  start() { this.stop(); this.newWord(); },
+  stop() { clearTimeout(this.timer); this.busy = false; this.elementOpen = false; },
+
+  newWord() {
+    this.word = pickWord();
+    this.idx = 0;
+    this.rows = [];
+    const host = $('spellRows');
+    host.innerHTML = '';
+    $('spellWord').classList.remove('success');
+    for (const ch of this.word) {
+      const el = document.createElement('div');
+      el.className = 'spell-row';
+      el.innerHTML = '<div class="spell-letter"></div><div class="rows"><div class="row target"></div><div class="row keyed"></div></div>';
+      host.appendChild(el);
+      renderTarget(el.querySelector('.row.target'), MORSE[ch]);
+      this.rows.push({ ch, el, locked: false, keyed: new KeyedRow(el.querySelector('.row.keyed')) });
+    }
+    this.activate(0);
+  },
+
+  activate(i) {
+    this.busy = true;                       // no key input until the character is fully loaded
+    this.idx = i;
+    this.wrongCount = 0; this.revealed = false; this.attemptEnded = false;
+    this.playCount = 0; this.elementOpen = false;
+    Keyer.reset();
+    this.refresh();
+    if (settings.autoplay) this.playTarget();
+    this.busy = false;
+  },
+
+  accepting() { return !this.busy; },
+  cur() { return this.rows[this.idx]; },
+
+  refresh() {
+    const wordEl = $('spellWord');
+    wordEl.innerHTML = '';
+    this.rows.forEach((r, i) => {
+      const visible = settings.showLetter || r.locked;
+      const span = document.createElement('span');
+      span.textContent = visible ? r.ch : '•';
+      span.className = (r.locked ? 'locked' : '') + (i === this.idx ? ' cur' : '') + (visible ? '' : ' hid');
+      wordEl.appendChild(span);
+      const letter = r.el.querySelector('.spell-letter');
+      letter.textContent = visible ? r.ch : '•';
+      letter.classList.toggle('hiddenLetter', !visible);
+      r.el.classList.toggle('active', i === this.idx);
+      r.el.classList.toggle('locked', r.locked);
+      const showPattern = r.locked || settings.showPattern || (i === this.idx && this.revealed);
+      r.el.querySelector('.row.target').classList.toggle('hidden', !showPattern);
+    });
+    updateReplayButton();
+  },
+
+  canReplay() { return !settings.playOnce || this.attemptEnded || this.playCount === 0; },
+  playTarget() {
+    if (!this.canReplay() || !this.cur()) return;
+    this.playCount++;
+    Audio.playText(this.cur().ch);
+    updateReplayButton();
+  },
+
+  onKeyDown(gapMs) { if (this.busy) return; this.elementOpen = true; this.cur().keyed.begin(gapMs); },
+  onHold(ms) { if (this.elementOpen) this.cur().keyed.hold(ms); },
+  onElement(e) {
+    if (!this.elementOpen) return;
+    this.elementOpen = false;
+    this.cur().keyed.end(e.sym, e.durMs);
+  },
+  onCharGap() {
+    if (this.busy || !this.cur().keyed.seq().length) return;
+    this.evaluate();
+  },
+  onWordGap() { /* the word ends when its last character locks in; hook kept for free-keying modes */ },
+
+  evaluate() {
+    const r = this.cur();
+    const keyed = r.keyed.seq(), pattern = MORSE[r.ch];
+    this.attemptEnded = true;
+    this.busy = true;
+    if (keyed === pattern) {
+      Stats.record(r.ch, true);
+      if (this.wrongCount === 0) noteHit(r.ch);
+      r.locked = true;
+      const done = this.idx === this.rows.length - 1;
+      if (done) $('spellWord').classList.add('success');
+      this.refresh();
+      // Auto-advance: next character after autoAdvanceMs, next word after wordAdvanceMs.
+      this.timer = setTimeout(() => done ? this.newWord() : this.activate(this.idx + 1),
+                              done ? TIMING.wordAdvanceMs : autoAdvanceMs());
+      return;
+    }
+    Stats.record(r.ch, false);
+    noteMiss(r.ch);
+    this.wrongCount++;
+    r.keyed.flashWrong(wrongIndices(keyed, pattern));
+    updateReplayButton();
+    this.timer = setTimeout(() => {
+      r.keyed.clear();
+      if (this.wrongCount >= 2) this.revealed = true;
+      this.refresh();
+      this.busy = false;
+    }, TIMING.FLASH_MS);
+  },
+};
+
+/* ==================================================================
+ * 11. TRANSCRIBE MODE
+ *     Plays a word; the user types what they heard.
+ * ================================================================== */
+const TranscribeMode = {
+  name: 'transcribe',
+  word: '', submitted: false, playCount: 0,
+
+  start() { this.newWord(); },
+  stop() {},
+
+  newWord() {
+    this.word = pickWord();
+    this.submitted = false;
+    this.playCount = 0;
+    $('trInput').value = '';
+    $('trResult').innerHTML = '';
+    $('trSubmit').textContent = 'Check';
+    this.renderKeys();
+    updateReplayButton();
+    if (settings.autoplay) this.playTarget();
+    if (!COARSE_POINTER) $('trInput').focus();
+  },
+
+  refresh() { this.renderKeys(); updateReplayButton(); },
+
+  canReplay() { return !settings.playOnce || this.submitted || this.playCount === 0; },
+  playTarget() {
+    if (!this.canReplay()) return;
+    this.playCount++;
+    Audio.playText(this.word);
+    updateReplayButton();
+  },
+
+  // Submit checks the answer; a second submit moves on.
+  submit() {
+    if (this.submitted) { this.newWord(); return; }
+    const typed = $('trInput').value.toUpperCase().replace(/\s+/g, '');
+    this.submitted = true;
+    const target = this.word;
+    for (let i = 0; i < target.length; i++) {
+      const ok = typed[i] === target[i];
+      Stats.record(target[i], ok);
+      if (ok) noteHit(target[i]); else noteMiss(target[i]);
+    }
+    const n = Math.max(typed.length, target.length);
+    let heard = '', answer = '';
+    for (let i = 0; i < n; i++) {
+      const t = target[i], u = typed[i];
+      if (u === undefined)      { heard += span('_', 'miss'); answer += span(t, 'bad'); }
+      else if (t === undefined) { heard += span(u, 'extra'); answer += span(' ', ''); }
+      else if (t === u)         { heard += span(u, 'ok'); answer += span(t, 'ok'); }
+      else                      { heard += span(u, 'bad'); answer += span(t, 'bad'); }
+    }
+    $('trResult').innerHTML =
+      `<span class="lbl">You typed</span>${heard || span(' ', '')}` +
+      `<span class="lbl">Correct answer</span>${answer}`;
+    $('trSubmit').textContent = 'Next';
+    updateReplayButton();
+    function span(text, cls) { return `<span class="${cls}">${escapeHtml(text)}</span>`; }
+  },
+
+  // Simple on-screen keyboard for touch devices: unlocked characters only.
+  renderKeys() {
+    const host = $('trKeys');
+    host.hidden = !COARSE_POINTER;
+    $('trInput').inputMode = COARSE_POINTER ? 'none' : 'text';
+    if (!COARSE_POINTER) return;
+    const chars = unlockedChars().slice().sort((a, b) => keyRank(a) - keyRank(b) || a.localeCompare(b));
+    host.innerHTML = '';
+    for (const ch of chars) host.appendChild(keyButton(ch, () => { $('trInput').value += ch; }));
+    host.appendChild(keyButton('⌫', () => { $('trInput').value = $('trInput').value.slice(0, -1); }, 'wide'));
+    host.appendChild(keyButton('↵', () => this.submit(), 'wide'));
+    function keyRank(c) { return /[A-Z]/.test(c) ? 0 : /[0-9]/.test(c) ? 1 : 2; }
+    function keyButton(label, fn, cls) {
+      const b = document.createElement('button');
+      b.type = 'button'; b.className = 'btn ' + (cls || ''); b.textContent = label;
+      b.addEventListener('click', fn);
+      return b;
+    }
+  },
+};
+
+const MODES = { char: CharMode, spell: SpellMode, transcribe: TranscribeMode };
+
+/* ==================================================================
+ * 12. SESSION STATS
+ * ================================================================== */
+const Stats = {
+  attempts: 0, correct: 0, streak: 0, best: 0, perChar: {},
+  record(ch, ok) {
+    this.attempts++;
+    if (ok) { this.correct++; this.streak++; this.best = Math.max(this.best, this.streak); }
+    else this.streak = 0;
+    const p = this.perChar[ch] || (this.perChar[ch] = { a: 0, c: 0 });
+    p.a++; if (ok) p.c++;
+    this.render();
+  },
+  reset() { this.attempts = 0; this.correct = 0; this.streak = 0; this.best = 0; this.perChar = {}; this.render(); },
+  render() {
+    const acc = this.attempts ? Math.round(100 * this.correct / this.attempts) : 0;
+    $('statLine').innerHTML =
+      `Attempts <b>${this.attempts}</b> &middot; Accuracy <b>${acc}%</b> &middot; Streak <b>${this.streak}</b> (best ${this.best})`;
+    const grid = $('charStatsGrid');
+    grid.innerHTML = '';
+    for (const ch of unlockedChars()) {
+      const p = this.perChar[ch];
+      const d = document.createElement('div');
+      if (p) {
+        const pct = p.c / p.a;
+        d.className = pct >= 0.8 ? 'good' : pct < 0.5 ? 'bad' : '';
+        d.textContent = `${ch} ${p.c}/${p.a}`;
+      } else d.textContent = `${ch} –`;
+      grid.appendChild(d);
+    }
+  },
+};
+
+/* ==================================================================
+ * 13. UI WIRING: settings panel, mode switching, input events
+ * ================================================================== */
+const $ = id => document.getElementById(id);
+const COARSE_POINTER = matchMedia('(pointer: coarse)').matches;
+let current = null;    // active mode object
+let started = false;   // false until the first user gesture unlocks audio
+
+function escapeHtml(s) { return String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
+
+function updateReplayButton() {
+  $('replayBtn').disabled = !started || !current || !current.canReplay();
+}
+
+function setMode(name) {
+  if (current) current.stop();
+  settings.mode = name;
+  saveSettings();
+  document.querySelectorAll('.mode').forEach(s => { s.hidden = s.id !== 'mode-' + name; });
+  $('keypad').hidden = name === 'transcribe';
+  current = MODES[name];
+  Keyer.listener = current;
+  syncSettingsUI();
+  updateWordNote();
+  if (started) current.start();
+}
+
+function syncSettingsUI() {
+  $('modeSeg').querySelectorAll('button').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.mode === settings.mode)));
+  const preset = currentPreset();
+  $('assistSeg').querySelectorAll('button').forEach(b => b.setAttribute('aria-pressed', String(+b.dataset.assist === preset)));
+  $('assistName').textContent = preset ? PRESETS[preset].name : 'Custom';
+  $('assistDesc').textContent = preset ? PRESETS[preset].desc : 'Custom mix of the toggles below.';
+  document.querySelectorAll('.check input').forEach(cb => { cb.checked = !!settings[cb.dataset.key]; });
+  $('wpm').value = settings.wpm;
+  $('wpmVal').textContent = settings.wpm;
+  $('autoAdvance').value = settings.autoAdvanceMs;
+  $('autoAdvanceVal').textContent = settings.autoAdvanceMs;
+  $('level').value = settings.level;
+  $('levelVal').textContent = `${settings.level} of ${KOCH_ORDER.length}`;
+  const u = unlockedChars();
+  $('unlockedList').innerHTML = u.map((c, i) => i === u.length - 1 ? `<b>${escapeHtml(c)}</b>` : escapeHtml(c)).join('');
+  $('customWords').value = settings.customWords;
+  const custom = customWordList();
+  const fit = availableWords().length;
+  $('wordListNote').textContent = custom.length
+    ? `Custom list: ${custom.length} words, ${fit} fit level ${settings.level}.`
+    : `Built-in list: ${BUILTIN_WORDS.length} words, ${fit} fit level ${settings.level}.`;
+  Stats.render();
+}
+
+function openSettings(open) {
+  document.body.classList.toggle('settings-open', open);
+  $('settingsBtn').setAttribute('aria-expanded', String(open));
+}
+
+function bindSettings() {
+  $('settingsBtn').addEventListener('click', () => openSettings(!document.body.classList.contains('settings-open')));
+  $('closeSettings').addEventListener('click', () => openSettings(false));
+  $('backdrop').addEventListener('click', () => openSettings(false));
+
+  $('modeSeg').addEventListener('click', e => {
+    const b = e.target.closest('button'); if (b) setMode(b.dataset.mode);
+  });
+  $('assistSeg').addEventListener('click', e => {
+    const b = e.target.closest('button'); if (!b) return;
+    applyPreset(+b.dataset.assist);
+    syncSettingsUI();
+    current.refresh();
+  });
+  document.querySelectorAll('.check input').forEach(cb => cb.addEventListener('change', () => {
+    settings[cb.dataset.key] = cb.checked;
+    saveSettings();
+    syncSettingsUI();
+    current.refresh();
+  }));
+  $('wpm').addEventListener('input', e => {
+    settings.wpm = clamp(+e.target.value, TIMING.WPM_MIN, TIMING.WPM_MAX);
+    saveSettings();
+    $('wpmVal').textContent = settings.wpm;
+  });
+  $('autoAdvance').addEventListener('input', e => {
+    settings.autoAdvanceMs = clamp(+e.target.value, TIMING.AUTO_ADVANCE_MIN, TIMING.AUTO_ADVANCE_MAX);
+    saveSettings();
+    $('autoAdvanceVal').textContent = settings.autoAdvanceMs;
+  });
+  $('level').addEventListener('input', e => {
+    settings.level = clamp(+e.target.value, 1, KOCH_ORDER.length);
+    saveSettings();
+    syncSettingsUI();
+  });
+  $('level').addEventListener('change', () => { if (started) current.start(); });
+  let wordsTimer = 0;
+  $('customWords').addEventListener('input', e => {
+    settings.customWords = e.target.value;
+    saveSettings();
+    clearTimeout(wordsTimer);
+    wordsTimer = setTimeout(() => {
+      const fit = availableWords().length;
+      const custom = customWordList();
+      $('wordListNote').textContent = custom.length
+        ? `Custom list: ${custom.length} words, ${fit} fit level ${settings.level}.`
+        : `Built-in list: ${BUILTIN_WORDS.length} words, ${fit} fit level ${settings.level}.`;
+      if (started && settings.mode !== 'char') current.start();
+    }, 400);
+  });
+  $('resetStats').addEventListener('click', () => Stats.reset());
+  $('resetMisses').addEventListener('click', () => { settings.missScore = {}; saveSettings(); });
+}
+
+function isTextField(el) {
+  return el && (el.tagName === 'INPUT' && el.type === 'text' || el.tagName === 'TEXTAREA');
+}
+
+function bindInput() {
+  // Spacebar as a straight key. Ignore auto-repeat, never scroll the page.
+  window.addEventListener('keydown', e => {
+    if (!started) { startApp(); e.preventDefault(); return; }
+    if (e.key === 'Escape') { openSettings(false); return; }
+    if (isTextField(e.target)) return;
+    if (e.code === 'Space' || e.key === ' ') {
+      e.preventDefault();
+      if (e.repeat) return;
+      Keyer.keyDown();
+    } else if ((e.key === 'r' || e.key === 'R') && !e.metaKey && !e.ctrlKey) {
+      current.playTarget();
+    }
+  });
+  window.addEventListener('keyup', e => {
+    if (e.code === 'Space' || e.key === ' ') {
+      if (isTextField(e.target)) return;
+      e.preventDefault();
+      Keyer.keyUp();
+    }
+  });
+  // Losing focus or the tab going hidden must never leave the key stuck down.
+  window.addEventListener('blur', () => Keyer.keyUp());
+  document.addEventListener('visibilitychange', () => { if (document.hidden) Keyer.keyUp(); });
+
+  // On-screen key. pointercancel/pointerleave count as key-up so a dragged
+  // finger cannot leave the key stuck down.
+  const key = $('keyBtn');
+  key.addEventListener('pointerdown', e => { e.preventDefault(); Keyer.keyDown(); });
+  ['pointerup', 'pointercancel', 'pointerleave'].forEach(t => key.addEventListener(t, () => { Keyer.keyUp(); Audio.ensure(); }));
+  key.addEventListener('contextmenu', e => e.preventDefault());
+
+  // Buttons must not keep focus, or Space would click them instead of keying.
+  document.addEventListener('click', e => {
+    const b = e.target.closest('button');
+    if (b && !b.closest('.tr-keys')) b.blur();
+    if (started) Audio.ensure();
+  });
+
+  $('replayBtn').addEventListener('click', () => current.playTarget());
+  $('trForm').addEventListener('submit', e => { e.preventDefault(); TranscribeMode.submit(); });
+  $('startOverlay').addEventListener('click', startApp);
+}
+
+// Size one dit so the widest pattern fits the practice column.
+function updateUnit() {
+  const w = $('practice').clientWidth - 24;
+  const unit = clamp(Math.floor(w / (+getComputedStyle(document.documentElement).getPropertyValue('--stage-units') || 28)), 5, 14);
+  document.documentElement.style.setProperty('--unit', unit + 'px');
+}
+
+function startApp() {
+  if (started) return;
+  started = true;
+  Audio.ensure();
+  $('startOverlay').hidden = true;
+  current.start();
+}
+
+/* ==================================================================
+ * 14. INIT
+ * ================================================================== */
+bindSettings();
+bindInput();
+updateUnit();
+if (window.ResizeObserver) new ResizeObserver(updateUnit).observe($('practice'));
+else window.addEventListener('resize', updateUnit);
+setMode(settings.mode);
+</script>
+</body>
+</html>
