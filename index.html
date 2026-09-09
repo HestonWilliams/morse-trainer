@@ -1337,13 +1337,16 @@ const Stats = {
       `Attempts <b>${this.attempts}</b> &middot; Accuracy <b>${acc}%</b> &middot; Streak <b>${this.streak}</b> (best ${this.best})`;
     const grid = $('charStatsGrid');
     grid.innerHTML = '';
-    for (const ch of unlockedChars()) {
+    // Weakest first; untried characters (no accuracy yet) go last.
+    const rows = unlockedChars().map(ch => {
       const p = this.perChar[ch];
+      return { ch, p, pct: p ? p.c / p.a : Infinity };
+    }).sort((x, y) => x.pct - y.pct);
+    for (const { ch, p, pct } of rows) {
       const d = document.createElement('div');
       if (p) {
-        const pct = p.c / p.a;
         d.className = pct >= 0.8 ? 'good' : pct < 0.5 ? 'bad' : '';
-        d.textContent = `${ch} ${p.c}/${p.a}`;
+        d.textContent = `${ch} ${p.c}/${p.a} ${Math.round(100 * pct)}%`;
       } else d.textContent = `${ch} –`;
       grid.appendChild(d);
     }
