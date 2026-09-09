@@ -2,7 +2,7 @@
 
 A single-file, offline browser trainer for sending and receiving Morse code with a straight key, built around the Koch method.
 
-**Live demo:** https://YOUR-USERNAME.github.io/morse-trainer/ (placeholder, update after enabling GitHub Pages)
+**Live demo:** https://hestonwilliams.github.io/morse-trainer/ (placeholder, update after enabling GitHub Pages)
 
 ## Run it locally
 
