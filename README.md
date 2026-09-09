@@ -89,7 +89,9 @@ Everything lives in `index.html`. The script is divided into numbered, commented
 
 **Word lists.** The built-in lists are `COMMON_WORDS` and `HAM_WORDS` in section 3. Both are plain whitespace-separated strings, so add words anywhere in them. Words must use only characters present in `MORSE`.
 
-**Your own words without editing code.** Paste a list into the custom word list box in settings, one word per line. It overrides the built-in list, is filtered to the characters in the current lesson, and persists in `localStorage`. Clear the box to go back to the built-in list.
+**Your own words without editing code.** Paste a list into the custom word list box in settings. Words can be separated by line breaks, spaces, or commas. It overrides the built-in list, is filtered to the characters in the current lesson, and persists in `localStorage`. Characters that cannot be sent in Morse are removed from a word; an entry with nothing left is skipped, and the note under the box says how many were skipped or altered. Clear the box to go back to the built-in list.
+
+**Drill one word.** Type a word or short phrase into the "Drill this word" box in settings and press Start. Spell mode then repeats that word until you have keyed it cleanly, with no retried character, a set number of times in a row (1 to 10, default 3). The lesson filter does not apply: characters above the current lesson are used anyway, and a note under the progress markers names them. Per-character accuracy for the drill is shown under the word and also counts toward the session stats. A retry on any character resets the clean-pass count. When the word is mastered you can drill it again or go back to the word list. The last word, the required count, and the last five drilled words are remembered.
 
 ## License
 

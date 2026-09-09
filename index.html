@@ -132,6 +132,30 @@ body.playing #replayBtn { color: var(--green); border-color: var(--green); }
 .spell-letter.hiddenLetter { color: var(--muted); opacity: .45; }
 .spell-row .rows { display: grid; grid-template-rows: var(--bar-h) var(--bar-h); gap: 6px; }
 
+/* Spell mode drill: one word repeated until mastered */
+.word.long { font-size: clamp(22px, 5vmin, 40px); letter-spacing: .1em; }
+.word .gap { display: inline-block; width: .5em; }
+.drill-bar { width: min(100%, 520px); font-size: 14px; color: var(--muted); text-align: center; margin-bottom: 10px; }
+.drill-bar b { color: var(--fg); }
+.drill-bar .marks { display: inline-flex; gap: 4px; vertical-align: middle; margin: 0 6px; }
+.drill-bar .mark { width: 12px; height: 12px; border-radius: 50%; border: 1px solid var(--muted); }
+.drill-bar .mark.on { background: var(--green); border-color: var(--green); }
+.drill-bar .hard { display: block; margin-top: 4px; }
+.drill-bar .hard b { color: var(--accent); font-family: ui-monospace, Menlo, monospace; }
+.drill-bar .btn { padding: 2px 10px; font-size: 13px; margin-left: 8px; vertical-align: middle; }
+.drill-stats { width: min(100%, 520px); font-size: 13px; color: var(--muted); margin-top: 14px; text-align: center; }
+.drill-done { text-align: center; margin-top: 16px; }
+.drill-done p { font-size: 18px; color: var(--green); margin: 0 0 12px; }
+.drill-done .btn { margin: 0 4px; }
+.drill-form { display: flex; gap: 8px; }
+.drill-form input {
+  flex: 1; min-width: 0; font-size: 16px; text-transform: uppercase; font-family: ui-monospace, Menlo, Consolas, monospace;
+  background: var(--panel-2); color: var(--fg); border: 1px solid var(--border); border-radius: 10px; padding: 8px 12px;
+}
+.drill-passes { margin-top: 12px; }
+.drill-recent { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.drill-recent .btn { padding: 4px 10px; font-size: 13px; font-family: ui-monospace, Menlo, monospace; }
+
 /* ------------------------------------------------------------------
    Transcribe mode
    ------------------------------------------------------------------ */
@@ -274,8 +298,18 @@ textarea {
 
     <!-- Spell mode -->
     <section class="mode" id="mode-spell" hidden>
+      <div class="drill-bar" id="drillBar" hidden></div>
       <div class="word" id="spellWord"></div>
       <div class="spell-rows" id="spellRows"></div>
+      <div class="drill-stats" id="drillStats" hidden>
+        <div>Accuracy in this drill</div>
+        <div class="charstats-grid" id="drillStatsGrid"></div>
+      </div>
+      <div class="drill-done" id="drillDone" hidden>
+        <p id="drillDoneMsg"></p>
+        <button class="btn primary" id="drillAgain" type="button">Drill again</button>
+        <button class="btn" id="drillBack" type="button">Back to words</button>
+      </div>
     </section>
 
     <!-- Transcribe mode -->
@@ -363,9 +397,21 @@ textarea {
     </div>
 
     <div class="field">
-      <label class="h" for="customWords">Custom word list, one per line</label>
+      <label class="h" for="customWords">Custom word list, separated by line breaks, spaces, or commas</label>
       <textarea id="customWords" placeholder="Leave empty to use the built-in list"></textarea>
       <p class="desc" id="wordListNote"></p>
+    </div>
+
+    <div class="field">
+      <label class="h" for="drillWord">Drill this word</label>
+      <form class="drill-form" id="drillForm" autocomplete="off">
+        <input id="drillWord" type="text" autocapitalize="characters" autocorrect="off" spellcheck="false" placeholder="word or short phrase" aria-label="Word to drill">
+        <button class="btn primary" id="drillStart" type="submit">Start</button>
+      </form>
+      <p class="desc" id="drillNote"></p>
+      <label class="h drill-passes" for="drillPasses">Clean passes to master: <b><span id="drillPassesVal"></span></b></label>
+      <input type="range" id="drillPasses" min="1" max="10" step="1">
+      <div class="drill-recent" id="drillRecent"></div>
     </div>
 
     <div class="field">
@@ -488,6 +534,9 @@ const BUILTIN_WORDS = [...new Set([...COMMON_WORDS, ...HAM_WORDS])];
  * ================================================================== */
 const STORAGE_KEY = 'morse-trainer.v1';
 
+// Spell mode drill: one word repeated until this many consecutive clean passes.
+const DRILL = { PASSES_MIN: 1, PASSES_MAX: 10, PASSES_DEFAULT: 3, HISTORY: 5 };
+
 // Assist presets. Index 0 is unused so the numbers match the UI labels.
 const PRESETS = [
   null,
@@ -509,6 +558,9 @@ const DEFAULTS = {
   mode: 'char',                       // 'char' | 'spell' | 'transcribe'
   showLetter: true, showPattern: false, autoplay: true, playOnce: false,  // preset 2, Recall
   customWords: '',
+  drillWord: '',                      // last word drilled in Spell mode
+  drillPasses: DRILL.PASSES_DEFAULT,  // clean passes needed to master a drill
+  drillHistory: [],                   // last few drilled words, most recent first
   missScore: {},                      // per-character miss weight, decays on clean hits
   keyInput: 'manual',                 // 'manual' (keyboard, touch, USB adapter) | 'mic' (audio input)
   micThreshold: 0,                    // band RMS level between key-up and key-down, from calibration
@@ -526,6 +578,9 @@ function loadSettings() {
   s.autoAdvanceMs = clamp(+s.autoAdvanceMs || TIMING.autoAdvanceMs, TIMING.AUTO_ADVANCE_MIN, TIMING.AUTO_ADVANCE_MAX);
   if (!['char', 'spell', 'transcribe'].includes(s.mode)) s.mode = 'char';
   if (!['manual', 'mic'].includes(s.keyInput)) s.keyInput = 'manual';
+  s.drillPasses = clamp(Math.round(+s.drillPasses) || DRILL.PASSES_DEFAULT, DRILL.PASSES_MIN, DRILL.PASSES_MAX);
+  if (typeof s.drillWord !== 'string') s.drillWord = '';
+  s.drillHistory = (Array.isArray(s.drillHistory) ? s.drillHistory : []).filter(w => typeof w === 'string' && w).slice(0, DRILL.HISTORY);
   return s;
 }
 function saveSettings() {
@@ -577,10 +632,21 @@ function noteHit(c) {
   saveSettings();
 }
 
-function customWordList() {
-  return settings.customWords.toUpperCase().split(/\r?\n/)
-    .map(w => w.trim()).filter(w => w && [...w].every(ch => MORSE[ch]));
+// Parse the custom list. Entries may be separated by any whitespace or commas.
+// Characters that are not in the Morse table are removed from each entry;
+// an entry with nothing left is skipped. Counts are reported in the note.
+function parseCustomWords() {
+  const out = { words: [], skipped: 0, altered: 0 };
+  for (const entry of settings.customWords.toUpperCase().split(/[\s,]+/)) {
+    if (!entry) continue;
+    const word = [...entry].filter(ch => MORSE[ch]).join('');
+    if (!word) { out.skipped++; continue; }
+    if (word !== entry) out.altered++;
+    out.words.push(word);
+  }
+  return out;
 }
+function customWordList() { return parseCustomWords().words; }
 function activeWordList() {
   const custom = customWordList();
   return custom.length ? custom : BUILTIN_WORDS;
@@ -588,6 +654,39 @@ function activeWordList() {
 function availableWords() {
   const set = new Set(unlockedChars());
   return activeWordList().filter(w => [...w].every(ch => set.has(ch)));
+}
+
+function count(n, one, many) { return `${n} ${n === 1 ? one : many}`; }
+// Text for the note under the custom word list box. Never silent: if the box
+// has text but no word survived parsing, say so and why.
+function wordListNoteText() {
+  const { words, skipped, altered } = parseCustomWords();
+  const fit = availableWords().length;
+  if (!words.length) {
+    if (!settings.customWords.trim()) return `Built-in list: ${BUILTIN_WORDS.length} words, ${fit} fit lesson ${settings.level}.`;
+    const why = skipped ? ` ${count(skipped, 'entry', 'entries')} contained only characters that cannot be sent in Morse.` : '';
+    return `No usable words.${why} The built-in list is used instead.`;
+  }
+  let note = `Custom list: ${count(words.length, 'word', 'words')}, ${fit} fit lesson ${settings.level}.`;
+  if (skipped) note += ` ${count(skipped, 'entry', 'entries')} skipped.`;
+  if (altered) note += ` ${count(altered, 'word', 'words')} had characters removed that cannot be sent in Morse.`;
+  return note;
+}
+
+// Drill entry: uppercase, Morse characters only, words separated by one space.
+function normalizeDrillWord(text) {
+  return String(text).toUpperCase().split(/\s+/)
+    .map(w => [...w].filter(ch => MORSE[ch]).join('')).filter(Boolean).join(' ');
+}
+// Characters in a drill word that the current lesson has not introduced yet.
+function drillHardChars(word) {
+  const set = new Set(unlockedChars());
+  return [...new Set(word)].filter(ch => ch !== ' ' && !set.has(ch));
+}
+function rememberDrill(word) {
+  settings.drillWord = word;
+  settings.drillHistory = [word, ...settings.drillHistory.filter(w => w !== word)].slice(0, DRILL.HISTORY);
+  saveSettings();
 }
 
 let lastWord = null;
@@ -1124,25 +1223,86 @@ const SpellMode = {
   name: 'spell',
   word: '', idx: 0, rows: [], wrongCount: 0, revealed: false, busy: false,
   elementOpen: false, attemptEnded: false, playCount: 0, timer: 0,
+  drill: null,   // { word, passes, retried, perChar, done } while one word is being drilled
 
   start() { this.stop(); this.newWord(); },
   stop() { clearTimeout(this.timer); this.busy = false; this.elementOpen = false; },
 
+  // Drill: the same word repeats, ignoring the lesson filter, until
+  // settings.drillPasses consecutive passes have no retried character.
+  startDrill(word) {
+    this.drill = { word, passes: 0, retried: false, perChar: {}, done: false };
+    if (settings.mode !== 'spell') setMode('spell');   // starts the mode once the app is running
+    else if (started) this.start();
+  },
+  endDrill() {
+    this.drill = null;
+    this.renderDrill();
+    if (started) this.start();
+  },
+  drillRecord(ch, ok) {
+    const p = this.drill.perChar[ch] || (this.drill.perChar[ch] = { a: 0, c: 0 });
+    p.a++; if (ok) p.c++;
+  },
+  renderDrill() {
+    const d = this.drill;
+    $('drillBar').hidden = !d;
+    $('drillStats').hidden = !d;
+    $('drillDone').hidden = !d || !d.done;
+    if (!d) return;
+    const need = settings.drillPasses, have = Math.min(d.passes, need);
+    const bar = $('drillBar');
+    bar.innerHTML = '';
+    const line = document.createElement('div');
+    line.append('Drilling ');
+    const w = document.createElement('b'); w.textContent = d.word; line.appendChild(w);
+    line.append(' \u00b7 Clean passes: ');
+    const marks = document.createElement('span'); marks.className = 'marks';
+    for (let i = 0; i < need; i++) {
+      const m = document.createElement('span'); m.className = 'mark' + (i < have ? ' on' : ''); marks.appendChild(m);
+    }
+    line.appendChild(marks);
+    line.append(`${have} of ${need}`);
+    if (!d.done) {
+      const stop = document.createElement('button');
+      stop.type = 'button'; stop.className = 'btn'; stop.id = 'drillStop'; stop.textContent = 'Stop drill';
+      stop.addEventListener('click', () => this.endDrill());
+      line.appendChild(stop);
+    }
+    bar.appendChild(line);
+    const hard = drillHardChars(d.word);
+    if (hard.length) {
+      const h = document.createElement('span'); h.className = 'hard';
+      h.append(`Not yet in lesson ${settings.level}: `);
+      const b = document.createElement('b'); b.textContent = hard.join(' '); h.appendChild(b);
+      bar.appendChild(h);
+    }
+    renderCharGrid($('drillStatsGrid'), [...new Set(d.word.replace(/ /g, ''))], d.perChar);
+    if (d.done) $('drillDoneMsg').textContent = `Mastered ${d.word}: ${count(d.passes, 'clean pass', 'clean passes')} in a row.`;
+  },
+
   newWord() {
-    this.word = pickWord();
+    const d = this.drill;
+    if (d) { this.word = d.word; d.retried = false; usingRandomGroups = false; updateWordNote(); }
+    else this.word = pickWord();
     this.idx = 0;
     this.rows = [];
     const host = $('spellRows');
     host.innerHTML = '';
     $('spellWord').classList.remove('success');
+    $('spellWord').classList.toggle('long', !!d && this.word.length > 8);
+    let gapBefore = false;
     for (const ch of this.word) {
+      if (ch === ' ') { gapBefore = true; continue; }   // phrase gap (drill only): no row, just space in the word
       const el = document.createElement('div');
       el.className = 'spell-row';
       el.innerHTML = '<div class="spell-letter"></div><div class="rows"><div class="row target"></div><div class="row keyed"></div></div>';
       host.appendChild(el);
       renderTarget(el.querySelector('.row.target'), MORSE[ch]);
-      this.rows.push({ ch, el, locked: false, keyed: new KeyedRow(el.querySelector('.row.keyed')) });
+      this.rows.push({ ch, el, locked: false, gapBefore, keyed: new KeyedRow(el.querySelector('.row.keyed')) });
+      gapBefore = false;
     }
+    this.renderDrill();
     this.activate(0);
   },
 
@@ -1164,6 +1324,7 @@ const SpellMode = {
     const wordEl = $('spellWord');
     wordEl.innerHTML = '';
     this.rows.forEach((r, i) => {
+      if (r.gapBefore) { const g = document.createElement('span'); g.className = 'gap'; wordEl.appendChild(g); }
       const visible = settings.showLetter || r.locked;
       const span = document.createElement('span');
       span.textContent = visible ? r.ch : '•';
@@ -1180,7 +1341,10 @@ const SpellMode = {
     updateReplayButton();
   },
 
-  canReplay() { return !settings.playOnce || this.attemptEnded || this.playCount === 0; },
+  canReplay() {
+    if (this.drill && this.drill.done) return false;
+    return !settings.playOnce || this.attemptEnded || this.playCount === 0;
+  },
   playTarget() {
     if (!this.canReplay() || !this.cur()) return;
     this.playCount++;
@@ -1206,19 +1370,28 @@ const SpellMode = {
     const keyed = r.keyed.seq(), pattern = MORSE[r.ch];
     this.attemptEnded = true;
     this.busy = true;
+    const d = this.drill;
     if (keyed === pattern) {
       Stats.record(r.ch, true);
+      if (d) this.drillRecord(r.ch, true);
       if (this.wrongCount === 0) noteHit(r.ch);
       r.locked = true;
       const done = this.idx === this.rows.length - 1;
       if (done) $('spellWord').classList.add('success');
+      if (done && d) {
+        d.passes = d.retried ? 0 : d.passes + 1;   // a retry anywhere in the pass resets the count
+        d.done = d.passes >= settings.drillPasses;
+      }
       this.refresh();
+      if (d) this.renderDrill();
+      if (d && d.done) return;   // finished state: stays busy until the user chooses what to do next
       // Auto-advance: next character after autoAdvanceMs, next word after wordAdvanceMs.
       this.timer = setTimeout(() => done ? this.newWord() : this.activate(this.idx + 1),
                               done ? TIMING.wordAdvanceMs : autoAdvanceMs());
       return;
     }
     Stats.record(r.ch, false);
+    if (d) { this.drillRecord(r.ch, false); d.retried = true; this.renderDrill(); }
     noteMiss(r.ch);
     this.wrongCount++;
     r.keyed.flashWrong(wrongIndices(keyed, pattern));
@@ -1335,23 +1508,26 @@ const Stats = {
     const acc = this.attempts ? Math.round(100 * this.correct / this.attempts) : 0;
     $('statLine').innerHTML =
       `Attempts <b>${this.attempts}</b> &middot; Accuracy <b>${acc}%</b> &middot; Streak <b>${this.streak}</b> (best ${this.best})`;
-    const grid = $('charStatsGrid');
-    grid.innerHTML = '';
-    // Weakest first; untried characters (no accuracy yet) go last.
-    const rows = unlockedChars().map(ch => {
-      const p = this.perChar[ch];
-      return { ch, p, pct: p ? p.c / p.a : Infinity };
-    }).sort((x, y) => x.pct - y.pct);
-    for (const { ch, p, pct } of rows) {
-      const d = document.createElement('div');
-      if (p) {
-        d.className = pct >= 0.8 ? 'good' : pct < 0.5 ? 'bad' : '';
-        d.textContent = `${ch} ${p.c}/${p.a} ${Math.round(100 * pct)}%`;
-      } else d.textContent = `${ch} –`;
-      grid.appendChild(d);
-    }
+    renderCharGrid($('charStatsGrid'), unlockedChars(), this.perChar);
   },
 };
+
+// One cell per character, weakest first; untried characters (no accuracy yet) go last.
+function renderCharGrid(grid, chars, perChar) {
+  grid.innerHTML = '';
+  const rows = chars.map(ch => {
+    const p = perChar[ch];
+    return { ch, p, pct: p ? p.c / p.a : Infinity };
+  }).sort((x, y) => x.pct - y.pct);
+  for (const { ch, p, pct } of rows) {
+    const d = document.createElement('div');
+    if (p) {
+      d.className = pct >= 0.8 ? 'good' : pct < 0.5 ? 'bad' : '';
+      d.textContent = `${ch} ${p.c}/${p.a} ${Math.round(100 * pct)}%`;
+    } else d.textContent = `${ch} –`;
+    grid.appendChild(d);
+  }
+}
 
 /* ==================================================================
  * 13. UI WIRING: settings panel, mode switching, input events
@@ -1396,12 +1572,41 @@ function syncSettingsUI() {
   const u = unlockedChars();
   $('unlockedList').innerHTML = u.map((c, i) => i === u.length - 1 ? `<b>${escapeHtml(c)}</b>` : escapeHtml(c)).join(' ');
   $('customWords').value = settings.customWords;
-  const custom = customWordList();
-  const fit = availableWords().length;
-  $('wordListNote').textContent = custom.length
-    ? `Custom list: ${custom.length} words, ${fit} fit lesson ${settings.level}.`
-    : `Built-in list: ${BUILTIN_WORDS.length} words, ${fit} fit lesson ${settings.level}.`;
+  $('wordListNote').textContent = wordListNoteText();
+  if (document.activeElement !== $('drillWord')) $('drillWord').value = settings.drillWord;
+  $('drillPasses').value = settings.drillPasses;
+  $('drillPassesVal').textContent = settings.drillPasses;
+  renderDrillRecent();
   Stats.render();
+}
+
+const DRILL_NOTE = 'Repeats one word in Spell mode until it is mastered. Characters above the current lesson are used anyway.';
+function renderDrillRecent() {
+  const host = $('drillRecent');
+  host.innerHTML = '';
+  for (const w of settings.drillHistory) {
+    const b = document.createElement('button');
+    b.type = 'button'; b.className = 'btn'; b.textContent = w; b.dataset.word = w;
+    b.setAttribute('aria-label', `Drill ${w}`);
+    host.appendChild(b);
+  }
+}
+function beginDrill(text) {
+  const word = normalizeDrillWord(text);
+  if (!word) {
+    $('drillNote').textContent = 'Nothing to drill: that entry has no characters that can be sent in Morse.';
+    return;
+  }
+  const altered = String(text).toUpperCase().trim().replace(/\s+/g, ' ') !== word;
+  $('drillNote').textContent = altered
+    ? `Drilling ${word}. Characters that cannot be sent in Morse were removed.`
+    : DRILL_NOTE;
+  rememberDrill(word);
+  $('drillWord').value = word;
+  $('drillWord').blur();        // so the spacebar keys instead of typing
+  renderDrillRecent();
+  SpellMode.startDrill(word);
+  if (matchMedia('(max-width: 800px)').matches) openSettings(false);   // the drawer would cover the drill
 }
 
 const INPUT_DESC = {
@@ -1507,14 +1712,23 @@ function bindSettings() {
     saveSettings();
     clearTimeout(wordsTimer);
     wordsTimer = setTimeout(() => {
-      const fit = availableWords().length;
-      const custom = customWordList();
-      $('wordListNote').textContent = custom.length
-        ? `Custom list: ${custom.length} words, ${fit} fit lesson ${settings.level}.`
-        : `Built-in list: ${BUILTIN_WORDS.length} words, ${fit} fit lesson ${settings.level}.`;
+      $('wordListNote').textContent = wordListNoteText();
       if (started && settings.mode !== 'char') current.start();
     }, 400);
   });
+  $('drillForm').addEventListener('submit', e => { e.preventDefault(); beginDrill($('drillWord').value); });
+  $('drillRecent').addEventListener('click', e => {
+    const b = e.target.closest('button'); if (b) beginDrill(b.dataset.word);
+  });
+  $('drillPasses').addEventListener('input', e => {
+    settings.drillPasses = clamp(+e.target.value, DRILL.PASSES_MIN, DRILL.PASSES_MAX);
+    saveSettings();
+    $('drillPassesVal').textContent = settings.drillPasses;
+    if (SpellMode.drill) SpellMode.renderDrill();
+  });
+  $('drillAgain').addEventListener('click', () => SpellMode.startDrill(SpellMode.drill.word));
+  $('drillBack').addEventListener('click', () => SpellMode.endDrill());
+  $('drillNote').textContent = DRILL_NOTE;
   $('resetStats').addEventListener('click', () => Stats.reset());
   $('resetMisses').addEventListener('click', () => { settings.missScore = {}; saveSettings(); });
 }
