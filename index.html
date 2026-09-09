@@ -235,6 +235,9 @@ textarea {
   border: 1px solid var(--border); border-radius: 8px; padding: 8px;
   font-family: ui-monospace, Menlo, monospace; font-size: 14px; resize: vertical;
 }
+.keybind { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 4px 0 6px; }
+.keybind .btn { padding: 6px 10px; font-size: 14px; }
+.keybind .btn[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); }
 .meter { position: relative; height: 12px; background: var(--panel-2); border: 1px solid var(--border); border-radius: 6px; overflow: hidden; margin: 10px 0 6px; }
 .meter-fill { height: 100%; width: 0; background: var(--blue); }
 .meter-thr { position: absolute; top: 0; bottom: 0; width: 2px; background: var(--green); display: none; }
@@ -353,6 +356,12 @@ textarea {
         <button type="button" data-input="mic">Audio input</button>
       </div>
       <p class="desc" id="inputDesc"></p>
+      <p class="desc" id="keyBindCurrent">Current key: <kbd>Space</kbd></p>
+      <div class="keybind">
+        <button class="btn" id="keyBindBtn" type="button" aria-pressed="false">Choose new key</button>
+        <button class="btn" id="keyBindReset" type="button">Reset to Space</button>
+      </div>
+      <p class="desc" id="keyBindMsg" hidden></p>
       <div id="micPanel" hidden>
         <div class="meter"><div class="meter-fill" id="micMeter"></div><div class="meter-thr" id="micThr"></div></div>
         <div class="mic-row"><span class="keyled" id="micLed"></span><span id="micState">Key up</span><span id="micLevel"></span></div>
@@ -426,7 +435,7 @@ textarea {
   <div>
     <h1>Morse Trainer</h1>
     <p>Tap or press any key to start.</p>
-    <p>Hold <kbd>Space</kbd> or the on-screen key to send.</p>
+    <p id="startHint">Hold <kbd>Space</kbd> or the on-screen key to send.</p>
   </div>
 </div>
 
@@ -534,6 +543,12 @@ const BUILTIN_WORDS = [...new Set([...COMMON_WORDS, ...HAM_WORDS])];
  * ================================================================== */
 const STORAGE_KEY = 'morse-trainer.v1';
 
+// Keys that can never be the straight key, with the reason shown to the user.
+const KEY_REJECT = {
+  Escape: 'Escape cancels choosing a key, so it cannot be the key itself.',
+  Tab: 'Tab is needed for keyboard navigation, so it cannot be the key.',
+};
+
 // Spell mode drill: one word repeated until this many consecutive clean passes.
 const DRILL = { PASSES_MIN: 1, PASSES_MAX: 10, PASSES_DEFAULT: 3, HISTORY: 5 };
 
@@ -563,6 +578,7 @@ const DEFAULTS = {
   drillHistory: [],                   // last few drilled words, most recent first
   missScore: {},                      // per-character miss weight, decays on clean hits
   keyInput: 'manual',                 // 'manual' (keyboard, touch, USB adapter) | 'mic' (audio input)
+  keyCode: 'Space',                   // KeyboardEvent.code of the keyboard key that acts as the straight key
   micThreshold: 0,                    // band RMS level between key-up and key-down, from calibration
   micToneHz: 0,                       // tone frequency found during calibration
 };
@@ -578,6 +594,7 @@ function loadSettings() {
   s.autoAdvanceMs = clamp(+s.autoAdvanceMs || TIMING.autoAdvanceMs, TIMING.AUTO_ADVANCE_MIN, TIMING.AUTO_ADVANCE_MAX);
   if (!['char', 'spell', 'transcribe'].includes(s.mode)) s.mode = 'char';
   if (!['manual', 'mic'].includes(s.keyInput)) s.keyInput = 'manual';
+  if (typeof s.keyCode !== 'string' || !s.keyCode || KEY_REJECT[s.keyCode]) s.keyCode = 'Space';
   s.drillPasses = clamp(Math.round(+s.drillPasses) || DRILL.PASSES_DEFAULT, DRILL.PASSES_MIN, DRILL.PASSES_MAX);
   if (typeof s.drillWord !== 'string') s.drillWord = '';
   s.drillHistory = (Array.isArray(s.drillHistory) ? s.drillHistory : []).filter(w => typeof w === 'string' && w).slice(0, DRILL.HISTORY);
@@ -998,7 +1015,7 @@ function percentile(a, p) {
 }
 
 /* ==================================================================
- * 7. KEY INPUT: spacebar + on-screen key -> timed elements
+ * 7. KEY INPUT: keyboard key + on-screen key -> timed elements
  *    The active mode is Keyer.listener and receives:
  *      onKeyDown(gapMs)   key pressed; gapMs = silence since the last key-up
  *      onHold(ms)         every animation frame while held
@@ -1008,6 +1025,43 @@ function percentile(a, p) {
  *      accepting()        false while a target is loading; a press that starts
  *                         then still sounds but is swallowed end to end
  * ================================================================== */
+// The keyboard key is identified by KeyboardEvent.code (the physical key), so
+// the binding survives layout changes and modifier state.
+const KEY_MODIFIERS = {
+  ShiftLeft: 'shiftKey', ShiftRight: 'shiftKey', ControlLeft: 'ctrlKey', ControlRight: 'ctrlKey',
+  AltLeft: 'altKey', AltRight: 'altKey', MetaLeft: 'metaKey', MetaRight: 'metaKey',
+};
+const KEY_NAMES = {
+  Space: 'Space', Enter: 'Enter', Backspace: 'Backspace', CapsLock: 'Caps Lock', ContextMenu: 'Menu',
+  ShiftLeft: 'Left Shift', ShiftRight: 'Right Shift', ControlLeft: 'Left Control', ControlRight: 'Right Control',
+  AltLeft: 'Left Alt', AltRight: 'Right Alt', MetaLeft: 'Left Command', MetaRight: 'Right Command',
+  ArrowUp: 'Up Arrow', ArrowDown: 'Down Arrow', ArrowLeft: 'Left Arrow', ArrowRight: 'Right Arrow',
+  Home: 'Home', End: 'End', PageUp: 'Page Up', PageDown: 'Page Down', Insert: 'Insert', Delete: 'Delete',
+  NumpadEnter: 'Numpad Enter', NumpadAdd: 'Numpad +', NumpadSubtract: 'Numpad -', NumpadMultiply: 'Numpad *',
+  NumpadDivide: 'Numpad /', NumpadDecimal: 'Numpad .', NumLock: 'Num Lock',
+  Backquote: '`', Minus: '-', Equal: '=', BracketLeft: '[', BracketRight: ']', Backslash: '\\',
+  Semicolon: ';', Quote: "'", Comma: ',', Period: '.', Slash: '/', IntlBackslash: '\\',
+};
+function keyName(code) {
+  if (KEY_NAMES[code]) return KEY_NAMES[code];
+  let m;
+  if ((m = /^Key([A-Z])$/.exec(code))) return m[1];
+  if ((m = /^Digit(\d)$/.exec(code))) return m[1];
+  if ((m = /^Numpad(\d)$/.exec(code))) return 'Numpad ' + m[1];
+  return code;
+}
+// Keys that Transcribe mode also needs for typing an answer.
+function isTypingKey(code) {
+  return /^(Key[A-Z]|Digit\d|Numpad\d|Period|Comma|Slash|Minus|Equal|Backspace|Enter|NumpadEnter|NumpadDecimal|NumpadDivide|NumpadSubtract)$/.test(code);
+}
+// True if the keydown for the bound key should be ignored: a bound modifier
+// with other modifiers held, so browser and OS shortcuts do not key.
+function keyBlockedByModifiers(e) {
+  const own = KEY_MODIFIERS[settings.keyCode];
+  if (!own) return false;
+  return ['shiftKey', 'ctrlKey', 'altKey', 'metaKey'].some(k => k !== own && e[k]);
+}
+
 const Keyer = {
   down: false, downAt: 0, upAt: 0, raf: 0, gapTimer: 0, listener: null,
   swallowed: false,   // current press started while the mode was not accepting input
@@ -1603,29 +1657,86 @@ function beginDrill(text) {
     : DRILL_NOTE;
   rememberDrill(word);
   $('drillWord').value = word;
-  $('drillWord').blur();        // so the spacebar keys instead of typing
+  $('drillWord').blur();        // so the bound key keys instead of typing
   renderDrillRecent();
   SpellMode.startDrill(word);
   if (matchMedia('(max-width: 800px)').matches) openSettings(false);   // the drawer would cover the drill
 }
 
 const INPUT_DESC = {
-  manual: 'Spacebar, the on-screen key, or a real key on a USB adapter that sends Space (see the README).',
-  mic: 'Key a practice oscillator or your rig\'s sidetone into the microphone. The app\'s own sidetone is off in this mode, and detection pauses while the target plays.',
+  manual: () => `The ${keyName(settings.keyCode)} key, the on-screen key, or a real key on a USB adapter that sends ${keyName(settings.keyCode)} (see the README).`,
+  mic: () => 'Key a practice oscillator or your rig\'s sidetone into the microphone. The app\'s own sidetone is off in this mode, and detection pauses while the target plays.',
 };
 
 function updateInputUI() {
   const mic = settings.keyInput === 'mic';
   $('inputSeg').querySelectorAll('button').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.input === settings.keyInput)));
-  $('inputDesc').textContent = INPUT_DESC[settings.keyInput];
+  $('inputDesc').textContent = INPUT_DESC[settings.keyInput]();
   $('micPanel').hidden = !mic;
   $('micCalibrate').disabled = !MicInput.active || !!MicInput.cal;
   $('micMsg').textContent = MicInput.message;
+  const name = escapeHtml(keyName(settings.keyCode));
   $('keyHint').innerHTML = MicInput.active
     ? 'audio input active &middot; sidetone off'
-    : 'hold <kbd>Space</kbd> on desktop';
+    : `hold <kbd>${name}</kbd> on desktop`;
+  $('startHint').innerHTML = `Hold <kbd>${name}</kbd> or the on-screen key to send.`;
+  $('keyBindCurrent').innerHTML = `Current key: <kbd>${name}</kbd>`;
+  $('keyBindBtn').textContent = KeyBind.capturing ? 'Press any key...' : 'Choose new key';
+  $('keyBindBtn').setAttribute('aria-pressed', String(KeyBind.capturing));
+  $('keyBindReset').disabled = settings.keyCode === 'Space';
+  $('keyBindMsg').textContent = KeyBind.message;
+  $('keyBindMsg').hidden = !KeyBind.message;
   renderMicMeter();
 }
+
+// Choosing the keyboard key: the next keydown after "Choose new key" becomes
+// the binding. Escape cancels; Tab is refused; typing keys are allowed with a
+// warning since Transcribe mode also needs them.
+const KeyBind = {
+  capturing: false, message: '',
+
+  begin() { this.capturing = true; this.message = ''; updateInputUI(); },
+  cancel() { if (!this.capturing) return; this.capturing = false; updateInputUI(); },
+
+  // Called from the keydown handler while capturing. Returns after consuming the event.
+  capture(e) {
+    if (e.repeat) return;
+    const code = e.code;
+    if (!code) return;
+    if (code === 'Escape') {
+      this.capturing = false;
+      this.message = `${KEY_REJECT.Escape} Kept ${keyName(settings.keyCode)}.`;
+      updateInputUI();
+      return;
+    }
+    if (KEY_REJECT[code]) { this.message = KEY_REJECT[code]; updateInputUI(); return; }   // stay in capture mode
+    this.set(e);
+  },
+
+  // Bind the key from a keydown event. The event, not just the code, is kept
+  // so shortcut conflicts are judged by the same test the keydown handler uses.
+  set(e) {
+    Keyer.keyUp();                       // never leave the old key stuck down across a change
+    const code = e.code;
+    settings.keyCode = code;
+    saveSettings();
+    this.capturing = false;
+    const name = keyName(code);
+    const shadowed = SHORTCUTS.filter(sc => sc.match(e));
+    if (shadowed.length) {
+      this.message = shadowed.map(sc => sc.loss(name)).join(' ');
+    } else if (isTypingKey(code)) {
+      this.message = `${name} is also a typing key. In Transcribe mode it types into the answer box while the box has focus, and keys only when the box does not.`;
+    } else if (KEY_MODIFIERS[code]) {
+      this.message = `${name} keys only on its own. Shortcuts that hold ${name} with other keys are left alone.`;
+    } else {
+      this.message = '';
+    }
+    updateInputUI();
+  },
+
+  reset() { this.capturing = false; this.message = ''; settings.keyCode = 'Space'; saveSettings(); updateInputUI(); },
+};
 
 function renderMicMeter() {
   if ($('micPanel').hidden) return;
@@ -1657,6 +1768,7 @@ async function setKeyInput(name) {
 }
 
 function openSettings(open) {
+  if (!open) KeyBind.cancel();
   document.body.classList.toggle('settings-open', open);
   $('settingsBtn').setAttribute('aria-expanded', String(open));
 }
@@ -1670,6 +1782,8 @@ function bindSettings() {
     const b = e.target.closest('button'); if (b) setKeyInput(b.dataset.input);
   });
   $('micCalibrate').addEventListener('click', () => { MicInput.calibrate(); updateInputUI(); });
+  $('keyBindBtn').addEventListener('click', () => { if (KeyBind.capturing) KeyBind.cancel(); else KeyBind.begin(); });
+  $('keyBindReset').addEventListener('click', () => KeyBind.reset());
   $('modeSeg').addEventListener('click', e => {
     const b = e.target.closest('button'); if (b) setMode(b.dataset.mode);
   });
@@ -1733,29 +1847,42 @@ function bindSettings() {
   $('resetMisses').addEventListener('click', () => { settings.missScore = {}; saveSettings(); });
 }
 
+// Keyboard shortcuts other than the straight key. The keydown handler runs
+// them, and the key chooser uses the same match() to warn when a new binding
+// would shadow one. Escape is not listed: it can never be bound (KEY_REJECT).
+const SHORTCUTS = [
+  { match: e => e.key === 'r' || e.key === 'R',
+    run: () => current.playTarget(),
+    loss: name => `${name} will no longer replay the target from the keyboard. The Replay button still works.` },
+];
+
 function isTextField(el) {
   return el && (el.tagName === 'INPUT' && el.type === 'text' || el.tagName === 'TEXTAREA');
 }
 
 function bindInput() {
-  // Spacebar as a straight key. Ignore auto-repeat, never scroll the page.
+  // The bound keyboard key (Space by default) as a straight key. Ignore
+  // auto-repeat, never let the key's default action (scrolling etc.) run.
   window.addEventListener('keydown', e => {
     if (!started) { startApp(); e.preventDefault(); return; }
+    if (KeyBind.capturing) { e.preventDefault(); KeyBind.capture(e); return; }
     if (e.key === 'Escape') { openSettings(false); return; }
     if (isTextField(e.target)) return;
-    if (e.code === 'Space' || e.key === ' ') {
+    if (e.code === settings.keyCode) {
+      if (keyBlockedByModifiers(e)) return;
       e.preventDefault();
       if (e.repeat) return;
       Keyer.keyDown();
-    } else if ((e.key === 'r' || e.key === 'R') && !e.metaKey && !e.ctrlKey) {
-      current.playTarget();
+    } else if (!e.metaKey && !e.ctrlKey) {
+      const sc = SHORTCUTS.find(x => x.match(e));
+      if (sc) sc.run();
     }
   });
   window.addEventListener('keyup', e => {
-    if (e.code === 'Space' || e.key === ' ') {
+    if (e.code === settings.keyCode) {
       if (isTextField(e.target)) return;
       e.preventDefault();
-      Keyer.keyUp();
+      Keyer.keyUp();     // always, so a press started before a modifier was added still ends
     }
   });
   // Losing focus or the tab going hidden must never leave the key stuck down.
@@ -1769,7 +1896,7 @@ function bindInput() {
   ['pointerup', 'pointercancel', 'pointerleave'].forEach(t => key.addEventListener(t, () => { Keyer.keyUp(); Audio.ensure(); }));
   key.addEventListener('contextmenu', e => e.preventDefault());
 
-  // Buttons must not keep focus, or Space would click them instead of keying.
+  // Buttons must not keep focus, or Space/Enter would click them instead of keying.
   document.addEventListener('click', e => {
     const b = e.target.closest('button');
     if (b && !b.closest('.tr-keys')) b.blur();

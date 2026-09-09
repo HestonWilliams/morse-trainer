@@ -43,9 +43,11 @@ If the pattern is already visible (level 1), a miss just clears the row and you 
 
 Choose the input source under **Key input** in settings. The spacebar and on-screen key always keep working, whatever you pick.
 
+The keyboard key that acts as the straight key is Space by default. Under **Key input**, press **Choose new key** and then the key you want; it is stored by physical position, so it survives keyboard layout changes. Escape cancels, Tab is refused, and a modifier such as Left Shift keys only when no other modifier is held, so shortcuts keep working. Letter and digit keys are allowed but type into the answer box in Transcribe mode while it has focus. **Reset to Space** restores the default.
+
 ### USB adapter (no setup in the app)
 
-Any straight key wired to a USB HID adapter that sends a spacebar keypress works with the trainer's existing keyboard handler. Off-the-shelf "Morse key to USB" adapters do this, and so does the do-it-yourself route: take a sacrificial USB keyboard, find the two contacts of its space switch, and wire the key across them. Leave the input set to **Keyboard / touch**.
+Any straight key wired to a USB HID adapter that sends a keypress works: bind whatever key it sends with **Choose new key**, or leave it on Space. An adapter that sends a spacebar keypress works with the trainer's existing keyboard handler. Off-the-shelf "Morse key to USB" adapters do this, and so does the do-it-yourself route: take a sacrificial USB keyboard, find the two contacts of its space switch, and wire the key across them. Leave the input set to **Keyboard / touch**.
 
 ### Audio input
 
